@@ -26,6 +26,7 @@ config.json.example (Feld KINDER_CONFIG, Default config.json).
 import os
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -101,9 +102,19 @@ class Kind:
     # Zugangsdaten des eigenen GFB-Catering-Accounts dieses Kindes.
     benutzername: str
     passwort: str
-    # Harte Ausschlussregeln, z. B. ["Fisch", "Schwein"]
+    # Harte Ausschlussregeln. "Fisch"/"Fleisch" (Groß-/Kleinschreibung egal)
+    # werden über das Kost-Kennzeichen der Seite erkannt (siehe
+    # _kost_kennzeichen()), alles andere per Textsuche in der Beschreibung
+    # (z. B. ["Nüsse"]).
     ausschluesse: list[str] = field(default_factory=list)
-    # Weiche Vorlieben, die der KI als Kontext mitgegeben werden, z. B. "mag Nudelgerichte"
+    # Priorisierte Liste bevorzugter Kategorien, z. B. ["DGE", "Classic",
+    # "BIO-Veggie"] für "möglichst gesund". Wird rein regelbasiert
+    # ausgewertet (keine KI nötig): Es gewinnt die erste Kategorie aus dieser
+    # Liste, die nach den Ausschlüssen noch verfügbar ist. Leer lassen, um
+    # stattdessen per Claude-API anhand von `vorlieben` auswählen zu lassen.
+    bevorzugte_kategorien: list[str] = field(default_factory=list)
+    # Weiche Vorlieben, die der KI als Kontext mitgegeben werden, z. B. "mag
+    # Nudelgerichte". Wird nur verwendet, wenn bevorzugte_kategorien leer ist.
     vorlieben: str = ""
 
 
@@ -121,6 +132,7 @@ def lade_kinder(config_pfad: str) -> list[Kind]:
             benutzername=eintrag["benutzername"],
             passwort=eintrag["passwort"],
             ausschluesse=eintrag.get("ausschluesse", []),
+            bevorzugte_kategorien=eintrag.get("bevorzugte_kategorien", []),
             vorlieben=eintrag.get("vorlieben", ""),
         )
         for eintrag in rohdaten
@@ -203,19 +215,70 @@ def lese_menueplan(page: Page) -> dict:
     return menueplan
 
 
+# Kost-Kennzeichen, das die Seite jedem Gericht mitgibt (letzte Klammer der
+# Beschreibung, z. B. "... (F, Ia, IV, VII)"): K = vegetarisch, F = Fisch,
+# G = Fleisch. Per Live-Inspektion bestätigt (u. a. sichtbar als Blatt-/
+# Fisch-Icon neben dem Gericht). Zuverlässiger als Textsuche, da Gerichtnamen
+# das Wort "Fisch"/"Fleisch" oft gar nicht enthalten (z. B. "Lachswürfel",
+# "Hähnchenragout").
+KOST_KENNZEICHEN_FUER_AUSSCHLUSS = {
+    "fisch": "F",
+    "fleisch": "G",
+}
+
+
+def _kost_kennzeichen(beschreibung: str) -> Optional[str]:
+    """Extrahiert K/F/G aus der letzten Klammer der Gerichtbeschreibung."""
+    treffer = re.findall(r"\(([A-Z])[,)]", beschreibung)
+    return treffer[-1] if treffer else None
+
+
 def waehle_gericht_regelbasiert(gerichte: list[str], kind: Kind) -> list[str]:
-    """Filtert harte Ausschlüsse heraus. Gibt die verbleibenden Optionen zurück."""
+    """Filtert harte Ausschlüsse heraus. Gibt die verbleibenden Optionen zurück.
+
+    "Fisch" und "Fleisch" in kind.ausschluesse werden über das Kost-
+    Kennzeichen der Seite erkannt (siehe _kost_kennzeichen()), alle anderen
+    Ausschlüsse per Textsuche in der Beschreibung.
+    """
+    kennzeichen_ausschluesse = {
+        KOST_KENNZEICHEN_FUER_AUSSCHLUSS[a.lower()]
+        for a in kind.ausschluesse
+        if a.lower() in KOST_KENNZEICHEN_FUER_AUSSCHLUSS
+    }
+    text_ausschluesse = [a for a in kind.ausschluesse if a.lower() not in KOST_KENNZEICHEN_FUER_AUSSCHLUSS]
+
     gefiltert = [
         g for g in gerichte
-        if not any(ausschluss.lower() in g.lower() for ausschluss in kind.ausschluesse)
+        if _kost_kennzeichen(g) not in kennzeichen_ausschluesse
+        and not any(ausschluss.lower() in g.lower() for ausschluss in text_ausschluesse)
     ]
     return gefiltert or gerichte  # Fallback: falls alles ausgeschlossen ist, alle anzeigen
 
 
-def waehle_gericht_per_ki(tag: str, optionen: list[str], kind: Kind, api_key: str) -> str:
+def waehle_gericht_nach_kategorie(optionen: list[str], bevorzugte_kategorien: list[str]) -> Optional[str]:
+    """Wählt rein regelbasiert die erste verfügbare bevorzugte Kategorie
+    (z. B. ["DGE", "Classic", "BIO-Veggie"] für "möglichst gesund").
+
+    Gibt None zurück, wenn keine der bevorzugten Kategorien unter den
+    (bereits ausschlussgefilterten) Optionen vorhanden ist.
+    """
+    kategorie_zu_gericht = {g.split(":", 1)[0].strip(): g for g in optionen}
+    for kategorie in bevorzugte_kategorien:
+        if kategorie in kategorie_zu_gericht:
+            return kategorie_zu_gericht[kategorie]
+    return None
+
+
+def waehle_gericht_per_ki(tag: str, optionen: list[str], kind: Kind, api_key: Optional[str]) -> str:
     """Lässt Claude aus den (bereits regelgefilterten) Optionen das passende Gericht wählen."""
     if len(optionen) == 1:
         return optionen[0]
+
+    if not api_key:
+        raise RuntimeError(
+            f"Keine bevorzugte Kategorie für {kind.name} verfügbar und kein "
+            "ANTHROPIC_API_KEY gesetzt – kann kein Gericht auswählen."
+        )
 
     prompt = f"""Wähle für {kind.name} das passende Mittagessen für {tag} aus folgenden Optionen:
 {json.dumps(optionen, ensure_ascii=False)}
@@ -247,6 +310,24 @@ Antworte NUR mit dem exakten Gerichtnamen aus der Liste, ohne weitere Erklärung
         log.warning("KI-Antwort '%s' nicht in Optionen, nehme erste Option als Fallback.", text)
         return optionen[0]
     return text
+
+
+def waehle_gericht(tag: str, optionen: list[str], kind: Kind, api_key: Optional[str]) -> str:
+    """Wählt aus den (bereits ausschlussgefilterten) Optionen ein Gericht.
+
+    Ist kind.bevorzugte_kategorien gesetzt, entscheidet das rein regelbasiert
+    (keine KI nötig). Nur wenn keine der bevorzugten Kategorien verfügbar ist
+    – oder gar keine gesetzt sind –, wird auf die Claude-API zurückgegriffen.
+    """
+    if kind.bevorzugte_kategorien:
+        gericht = waehle_gericht_nach_kategorie(optionen, kind.bevorzugte_kategorien)
+        if gericht is not None:
+            return gericht
+        log.warning(
+            "Keine der bevorzugten Kategorien %s für %s am %s verfügbar, weiche auf KI-Auswahl aus.",
+            kind.bevorzugte_kategorien, kind.name, tag,
+        )
+    return waehle_gericht_per_ki(tag, optionen, kind, api_key)
 
 
 def bestelle_gericht(page: Page, tag: str, kind: Kind, gericht: str) -> None:
@@ -314,7 +395,7 @@ def bestellung_abschliessen(page: Page) -> None:
     log.info("Bestellung abgeschlossen.")
 
 
-def bestelle_fuer_kind(p, pw_cfg: PlaywrightConfig, kind: Kind, api_key: str, dry_run: bool) -> None:
+def bestelle_fuer_kind(p, pw_cfg: PlaywrightConfig, kind: Kind, api_key: Optional[str], dry_run: bool) -> None:
     """Führt den kompletten Ablauf (Login, Auswahl, Bestätigung) für ein Kind
     in einer eigenen Browser-Session gegen dessen eigenen Account aus."""
     browser, context = erstelle_browser_context(p, pw_cfg)
@@ -325,7 +406,7 @@ def bestelle_fuer_kind(p, pw_cfg: PlaywrightConfig, kind: Kind, api_key: str, dr
 
         for tag, gerichte in menueplan.items():
             optionen = waehle_gericht_regelbasiert(gerichte, kind)
-            gericht = waehle_gericht_per_ki(tag, optionen, kind, api_key)
+            gericht = waehle_gericht(tag, optionen, kind, api_key)
             if dry_run:
                 log.info("[DRY RUN] Würde bestellen: %s / %s -> %s", tag, kind.name, gericht)
             else:
@@ -347,7 +428,10 @@ def bestelle_fuer_kind(p, pw_cfg: PlaywrightConfig, kind: Kind, api_key: str, dr
 
 
 def main() -> None:
-    api_key = os.environ["ANTHROPIC_API_KEY"]
+    # Nur nötig als Fallback für Kinder ohne bevorzugte_kategorien (siehe
+    # Kind/waehle_gericht) – wer für alle Kinder eine Kategorie-Präferenz
+    # setzt, braucht keinen ANTHROPIC_API_KEY.
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
     dry_run = os.environ.get("DRY_RUN", "true").lower() == "true"
     config_pfad = os.environ.get("KINDER_CONFIG", "config.json")
     kinder = lade_kinder(config_pfad)

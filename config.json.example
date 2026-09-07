@@ -3,14 +3,16 @@
     "name": "Kind 1",
     "benutzername": "kundennummer-oder-login-kind-1",
     "passwort": "passwort-kind-1",
-    "ausschluesse": ["Fisch"],
-    "vorlieben": "mag lieber vegetarisch, keine scharfen Gerichte"
+    "ausschluesse": ["Fisch", "Fleisch"],
+    "bevorzugte_kategorien": ["DGE", "Classic", "BIO-Veggie"],
+    "vorlieben": ""
   },
   {
     "name": "Kind 2",
     "benutzername": "kundennummer-oder-login-kind-2",
     "passwort": "passwort-kind-2",
-    "ausschluesse": ["Fisch", "Schweinefleisch"],
-    "vorlieben": ""
+    "ausschluesse": ["Fisch"],
+    "bevorzugte_kategorien": [],
+    "vorlieben": "mag lieber vegetarisch, keine scharfen Gerichte"
   }
 ]

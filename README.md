@@ -1,10 +1,16 @@
 # GFB Lunch Order – automatische Mittagessen-Bestellung
 
 Automatisiert die wöchentliche Bestellung auf `bestellung-gfb-catering.de`
-für mehrere Kinder, mit regelbasierter Vorfilterung (Ausschlüsse wie "kein Fisch")
-und KI-gestützter Auswahl (Claude API) unter den verbleibenden Optionen. Jedes
-Kind hat einen eigenen GFB-Catering-Account – das Skript loggt sich für jedes
-Kind separat ein und durchläuft den kompletten Ablauf einmal pro Account.
+für mehrere Kinder. Jedes Kind hat einen eigenen GFB-Catering-Account – das
+Skript loggt sich für jedes Kind separat ein und durchläuft den kompletten
+Ablauf einmal pro Account.
+
+Die Gerichtsauswahl ist **rein regelbasiert möglich, ganz ohne KI**: harte
+Ausschlüsse (z. B. "kein Fisch", "kein Fleisch" – erkannt über das
+Kost-Kennzeichen, das die Seite jedem Gericht mitgibt) plus eine
+Kategorie-Präferenz (z. B. "möglichst DGE, sonst Classic, sonst BIO-Veggie").
+Optional kann stattdessen die Claude-API anhand freier Text-Vorlieben
+entscheiden – pro Kind wählbar, siehe "Kinder & Regeln anpassen".
 
 > **Hinweis zur Wiederverwendbarkeit:** Die Selektoren sind spezifisch für das
 > Bestellportal `bestellung-gfb-catering.de`. Das Projekt eignet sich daher
@@ -40,6 +46,11 @@ per Playwright live gegen die echte Seite geprüft und die Selektoren in
   verifiziert; Erfolgstext nach dem Bestätigen: "Vielen Dank. Die
   Bestellung für den angegebenen Zeitraum wurde erfolgreich im System
   hinterlegt."
+- Jedes Gericht trägt ein Kost-Kennzeichen (`K`/`F`/`G`) als ersten
+  Buchstaben in der letzten Klammer der Beschreibung, live bestätigt anhand
+  des Blatt-/Fisch-Icons neben dem Gericht sowie der Allergene-Legende der
+  Seite (Fisch = Allergen IV). Wird für regelbasierte Fisch-/Fleisch-
+  Ausschlüsse genutzt, siehe "Kinder & Regeln anpassen".
 
 Da jedes Kind einen eigenen Account hat (kein gemeinsamer Account mit
 Kind-Umschaltung), läuft `main()` den kompletten Ablauf separat pro Kind in
@@ -106,18 +117,36 @@ Jedes Kind hat einen eigenen GFB-Catering-Account:
     "name": "Kind 1",
     "benutzername": "kundennummer-oder-login-kind-1",
     "passwort": "passwort-kind-1",
-    "ausschluesse": ["Fisch"],
-    "vorlieben": "mag lieber vegetarisch"
+    "ausschluesse": ["Fisch", "Fleisch"],
+    "bevorzugte_kategorien": ["DGE", "Classic", "BIO-Veggie"],
+    "vorlieben": ""
   },
   {
     "name": "Kind 2",
     "benutzername": "kundennummer-oder-login-kind-2",
     "passwort": "passwort-kind-2",
-    "ausschluesse": ["Fisch", "Schweinefleisch"],
-    "vorlieben": ""
+    "ausschluesse": ["Fisch"],
+    "bevorzugte_kategorien": [],
+    "vorlieben": "mag lieber vegetarisch, keine scharfen Gerichte"
   }
 ]
 ```
+
+- **`ausschluesse`**: "Fisch" und "Fleisch" werden über das Kost-Kennzeichen
+  erkannt, das die Seite jedem Gericht als ersten Buchstaben in der letzten
+  Klammer der Beschreibung mitgibt (`K` = vegetarisch, `F` = Fisch,
+  `G` = Fleisch – z. B. sichtbar am Blatt-/Fisch-Icon neben dem Gericht).
+  Das ist zuverlässiger als eine Textsuche, da Gerichtnamen wie
+  "Lachswürfel" oder "Hähnchenragout" die Wörter "Fisch"/"Fleisch" gar
+  nicht enthalten. Alle anderen Einträge (z. B. `"Nüsse"`) werden weiterhin
+  als Textsuche in der Beschreibung geprüft.
+- **`bevorzugte_kategorien`**: Priorisierte Liste, z. B.
+  `["DGE", "Classic", "BIO-Veggie"]` für "möglichst gesund" (DGE = von der
+  Deutschen Gesellschaft für Ernährung empfohlene Linie). Es gewinnt die
+  erste Kategorie, die nach den Ausschlüssen noch übrig ist – **komplett
+  regelbasiert, keine KI/API-Key nötig**. Leer lassen (`[]`), um
+  stattdessen die Claude-API anhand von `vorlieben` entscheiden zu lassen
+  (siehe Kind 2 im Beispiel oben).
 
 Der Pfad zur Config-Datei kann über die Umgebungsvariable `KINDER_CONFIG`
 gesetzt werden (Default: `config.json`). `config.json` liegt in `.gitignore`
