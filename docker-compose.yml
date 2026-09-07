@@ -1,0 +1,14 @@
+version: "3.8"
+
+services:
+  gfb-lunch-order:
+    build: .
+    container_name: gfb-lunch-order
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/data
+    # Zeitzone wichtig, damit der Cron-Job zur richtigen Uhrzeit läuft
+    environment:
+      - TZ=Europe/Berlin

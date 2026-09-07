@@ -1,0 +1,12 @@
+[
+  {
+    "name": "Kind 1",
+    "ausschluesse": ["Fisch"],
+    "vorlieben": "mag lieber vegetarisch, keine scharfen Gerichte"
+  },
+  {
+    "name": "Kind 2",
+    "ausschluesse": ["Fisch", "Schweinefleisch"],
+    "vorlieben": ""
+  }
+]

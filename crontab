@@ -1,0 +1,3 @@
+# Minute Stunde Tag Monat Wochentag Befehl
+# Läuft jeden Montag um 06:00 Uhr, Umgebungsvariablen werden aus /app/.env geladen
+0 6 * * 1 . /app/.env && cd /app && python order_lunch.py >> /data/order_lunch.log 2>&1
