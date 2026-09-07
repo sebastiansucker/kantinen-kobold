@@ -10,6 +10,9 @@ services:
       - .env
     volumes:
       - ./data:/data
+      # Enthält echte Zugangsdaten pro Kind, siehe config.json.example -
+      # bewusst nicht ins Image gebacken, sondern hier vom Host gemountet.
+      - ./config.json:/app/config.json:ro
     # Zeitzone wichtig, damit der Cron-Job zur richtigen Uhrzeit läuft
     environment:
       - TZ=Europe/Berlin

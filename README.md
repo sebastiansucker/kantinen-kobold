@@ -231,5 +231,24 @@ bestellen (z. B. bei Ferienbetreuung mit Verpflegung).
 
 ## Cron-Zeitpunkt ändern
 
-In `crontab`: `0 6 * * 1` = Montag 06:00 Uhr. Format: Minute Stunde Tag Monat
-Wochentag (0 = Sonntag … 6 = Samstag).
+In `crontab`: `0 6 * * *` = **täglich** um 06:00 Uhr. Format: Minute Stunde
+Tag Monat Wochentag (0 = Sonntag … 6 = Samstag).
+
+Bewusst täglich statt nur einmal pro Woche: Die Bestellfrist für die
+Folgewoche kann schon Mittwoch/Donnerstag der Vorwoche ablaufen – ein
+einzelner Wochenlauf (z. B. nur Montag) könnte das verpassen, falls der
+Speiseplan für die Folgewoche zu diesem Zeitpunkt noch nicht (vollständig)
+sichtbar war. Wiederholte Läufe sind sicher:
+
+- `bestelle_gericht()` lässt einen Tag unangetastet, sobald für ihn
+  **irgendeine** Option bereits bestellt ist (`check`-Status) – auch wenn
+  eine andere Kategorie ausgewählt wäre. Ein erneuter Lauf dreht also weder
+  eine frühere automatische noch eine manuell in der App geänderte
+  Bestellung zurück.
+- `bestellung_abschliessen()` erkennt einen leeren Warenkorb (Bestätigen-
+  Button per `disabled` deaktiviert, live bestätigt) und kehrt ohne Aktion
+  zurück, statt auf einen nicht klickbaren Button zu warten.
+
+Beides wurde live gegen die echte Seite verifiziert (bereits bestellter Tag
+blieb bei erneutem Aufruf mit anderer simulierter Präferenz unverändert;
+leerer Warenkorb führte zu keiner Aktion statt einem Timeout).

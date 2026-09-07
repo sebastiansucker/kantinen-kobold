@@ -396,23 +396,34 @@ def bestelle_gericht(page: Page, tag: str, kind: Kind, gericht: str) -> None:
     Session nötig). `tag` ist das volle Label aus lese_menueplan() (z. B.
     "07.09.26 - Montag"), `gericht` das kombinierte "Kategorie: Beschreibung"
     aus derselben Funktion.
-    """
-    log.info("Bestelle für %s am %s: %s", kind.name, tag, gericht)
 
+    Wichtig, da das Skript wiederholt laufen soll (z. B. mehrmals pro Woche,
+    um Bestellfristen sicher vor Ablauf zu erwischen): Ist für diesen Tag
+    bereits IRGENDEINE Option bestellt (mat-icon-Text "check") – egal ob aus
+    einem früheren automatischen Lauf oder manuell in der App geändert –,
+    wird nichts angefasst, auch wenn eine andere Kategorie als `gericht`
+    ausgewählt ist. Ein erneuter Lauf darf eine bestehende Auswahl nicht
+    zurückdrehen.
+    """
     tag_el = page.locator(".speiseplan-tagWbp").filter(has_text=tag)
-    for menu_el in tag_el.locator(".speiseplanMenu").all():
+    menu_els = tag_el.locator(".speiseplanMenu").all()
+
+    for menu_el in menu_els:
+        bestell_control = menu_el.locator("[data-testid='order-einzeln']")
+        if bestell_control.locator("mat-icon").inner_text().strip() == "check":
+            kategorie = menu_el.locator(".speiseplan-menu-titel strong").first.inner_text().strip()
+            log.info("Für %s am %s bereits eine Bestellung vorhanden (%s) – unverändert gelassen.", kind.name, tag, kategorie)
+            return
+
+    log.info("Bestelle für %s am %s: %s", kind.name, tag, gericht)
+    for menu_el in menu_els:
         kategorie = menu_el.locator(".speiseplan-menu-titel strong").first.inner_text().strip()
         beschreibung = menu_el.locator("#speiseplanMenuBeschreibung").inner_text().strip()
         if f"{kategorie}: {beschreibung}" != gericht:
             continue
 
         bestell_control = menu_el.locator("[data-testid='order-einzeln']")
-        status = bestell_control.locator("mat-icon").inner_text().strip()
         ist_gesperrt = "disabled" in (bestell_control.get_attribute("class") or "")
-
-        if status == "check":
-            log.info("Für %s am %s bereits bestellt: %s", kind.name, tag, gericht)
-            return
         if ist_gesperrt:
             log.warning("Bestellfrist für %s (%s) bereits abgelaufen – überspringe.", tag, gericht)
             return
@@ -439,6 +450,12 @@ def bestellung_abschliessen(page: Page) -> None:
     "Zum genannten Preis bestätigen" klicken. Bestätigter Erfolgstext:
     "Vielen Dank. Die Bestellung für den angegebenen Zeitraum wurde
     erfolgreich im System hinterlegt."
+
+    Wichtig, da das Skript wiederholt laufen soll: Ist der Warenkorb leer
+    (keine Bestelländerung vorgenommen, z. B. weil an allen Tagen bereits
+    bestellt war), ist der Bestätigen-Button per <button disabled> deaktiviert
+    – live bestätigt. Playwright würde beim Klick auf ein deaktiviertes
+    Element bis zum Timeout warten, daher hier vorab prüfen und überspringen.
     """
     page.get_by_text("Warenkorb", exact=False).first.click()
     page.wait_for_load_state("networkidle")
@@ -448,7 +465,12 @@ def bestellung_abschliessen(page: Page) -> None:
     except PWTimeout:
         pass  # Hinweisdialog erscheint nicht immer
 
-    page.get_by_role("button", name="Zum genannten Preis bestätigen").click()
+    bestaetigen_button = page.get_by_role("button", name="Zum genannten Preis bestätigen")
+    if bestaetigen_button.is_disabled():
+        log.info("Keine offenen Bestelländerungen im Warenkorb – nichts zu bestätigen.")
+        return
+
+    bestaetigen_button.click()
     page.wait_for_selector("text=Vielen Dank", timeout=15000)
     log.info("Bestellung abgeschlossen.")
 
