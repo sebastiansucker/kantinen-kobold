@@ -2,6 +2,7 @@
   "BB": [
     {"name": "Winterferien 2026", "von": "2026-02-02", "bis": "2026-02-07"},
     {"name": "Osterferien 2026", "von": "2026-03-30", "bis": "2026-04-10"},
+    {"name": "Variabler Ferientag 2026", "von": "2026-05-15", "bis": "2026-05-15"},
     {"name": "Beweglicher Ferientag 2026 (Brückentag nach Christi Himmelfahrt)", "von": "2026-05-26", "bis": "2026-05-26"},
     {"name": "Sommerferien 2026", "von": "2026-07-09", "bis": "2026-08-22"},
     {"name": "Herbstferien 2026", "von": "2026-10-19", "bis": "2026-10-30"},
