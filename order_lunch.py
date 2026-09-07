@@ -197,12 +197,18 @@ def login(page: Page, username: str, password: str) -> None:
     page.locator("#passwort").fill(password)
     page.get_by_role("button", name="Anmelden").click()
 
-    # TODO prüfen: Ohne echte Zugangsdaten konnte der Zustand nach dem Login
-    # nicht live eingesehen werden. Die App nennt den Speiseplan durchgehend
-    # "Speiseplan" (nicht "Menüplan" wie ursprünglich vermutet) – das
-    # folgende Warten muss anhand des echten Post-Login-Screens geprüft werden.
-    page.wait_for_selector("text=Speiseplan", timeout=15000)  # TODO prüfen
+    page.wait_for_selector("text=Speiseplan", timeout=15000)
     log.info("Login erfolgreich.")
+
+    # Nach dem Login erscheint manchmal ein Mitteilungen-Dialog (Angular CDK
+    # Overlay), der die komplette Seite mit einem Backdrop blockiert und
+    # jeden weiteren Klick (z. B. auf "Speiseplan") verhindert - live als
+    # echter Fehlschlag beobachtet. Schließen, falls vorhanden.
+    try:
+        page.get_by_text("Mitteilungen schließen", exact=False).first.click(timeout=3000)
+        log.info("Mitteilungen-Dialog geschlossen.")
+    except PWTimeout:
+        pass  # Kein Dialog vorhanden
 
 
 def lese_menueplan(page: Page, schulferien: Optional[list[tuple[date, date]]] = None) -> dict:
