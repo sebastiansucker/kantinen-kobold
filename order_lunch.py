@@ -607,9 +607,14 @@ def bestelle_fuer_kind(
 
         if ntfy_cfg and neue_bestellungen:
             uebersicht = "\n".join(f"{tag}: {gericht}" for tag, gericht in neue_bestellungen)
-            titel = f"Bestellt: {kind.name}"
             if dry_run:
-                titel = f"[DRY RUN] {titel}"
+                titel = f"[DRY RUN] Bestellt: {kind.name}"
+                uebersicht = (
+                    "DRY_RUN=true – es wurde NICHTS tatsächlich bestellt, "
+                    "nur eine Vorschau:\n\n" + uebersicht
+                )
+            else:
+                titel = f"Bestellt: {kind.name}"
             sende_ntfy_nachricht(ntfy_cfg, titel, uebersicht, tags=["white_check_mark"])
 
     except PWTimeout as e:
