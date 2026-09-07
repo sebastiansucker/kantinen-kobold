@@ -567,14 +567,18 @@ def waehle_gericht(tag: str, optionen: list[str], kind: Kind, api_key: Optional[
     return waehle_gericht_per_ki(tag, optionen, kind, api_key)
 
 
-def bestelle_gericht(page: Page, tag: str, kind: Kind, gericht: str) -> bool:
+def bestelle_gericht(page: Page, tag: str, kind: Kind, gericht: str) -> tuple[bool, bool]:
     """Wählt für einen Tag das per KI/Regeln bestimmte Gericht aus.
 
-    Gibt zurück, ob dabei tatsächlich eine neue Bestellung ausgelöst wurde
-    (False, falls bereits etwas bestellt war, die Frist abgelaufen ist oder
-    das Gericht nicht gefunden wurde) – wird für die ntfy-Erfolgsmeldung in
-    bestelle_fuer_kind() gebraucht, damit dort nur tatsächlich geänderte
-    Tage aufgelistet werden.
+    Gibt (ist_bestellt, ist_neu) zurück: ist_bestellt ist True, wenn für
+    diesen Tag am Ende IRGENDEINE Bestellung vorliegt – egal ob schon vorher
+    (aus einem früheren Lauf oder manuell) oder gerade erst in diesem Lauf –,
+    und wird für die "bestellt bis"-Angabe in der Lauf-Zusammenfassung
+    gebraucht (siehe bestelle_fuer_kind()). ist_neu ist nur True, wenn in
+    diesem Lauf tatsächlich neu bestellt wurde, und wird weiterhin für die
+    Erfolgsmeldung pro Kind gebraucht, damit dort nur tatsächlich geänderte
+    Tage aufgelistet werden. Beides False, falls die Bestellfrist bereits
+    abgelaufen ist oder das Gericht nicht gefunden wurde.
 
     `page` ist bereits im eigenen Account von `kind` eingeloggt (jedes Kind
     hat einen eigenen GFB-Catering-Account, kein Umschalten innerhalb einer
@@ -598,7 +602,7 @@ def bestelle_gericht(page: Page, tag: str, kind: Kind, gericht: str) -> bool:
         if bestell_control.locator("mat-icon").inner_text().strip() == "check":
             kategorie = menu_el.locator(".speiseplan-menu-titel strong").first.inner_text().strip()
             log.info("Für %s am %s bereits eine Bestellung vorhanden (%s) – unverändert gelassen.", kind.name, tag, kategorie)
-            return False
+            return True, False
 
     log.info("Bestelle für %s am %s: %s", kind.name, tag, gericht)
     for menu_el in menu_els:
@@ -611,13 +615,13 @@ def bestelle_gericht(page: Page, tag: str, kind: Kind, gericht: str) -> bool:
         ist_gesperrt = "disabled" in (bestell_control.get_attribute("class") or "")
         if ist_gesperrt:
             log.warning("Bestellfrist für %s (%s) bereits abgelaufen – überspringe.", tag, gericht)
-            return False
+            return False, False
 
         bestell_control.click()
-        return True
+        return True, True
 
     log.warning("Gericht '%s' am %s nicht im Speiseplan gefunden.", gericht, tag)
-    return False
+    return False, False
 
 
 def bestellung_abschliessen(page: Page) -> None:
@@ -661,6 +665,18 @@ def bestellung_abschliessen(page: Page) -> None:
     log.info("Bestellung abgeschlossen.")
 
 
+@dataclass
+class KindErgebnis:
+    """Ergebnis eines bestelle_fuer_kind()-Laufs für ein Kind."""
+
+    neue_bestellungen: list[tuple[str, str]] = field(default_factory=list)
+    # Letzter Tag (als date), für den am Ende des Laufs irgendeine Bestellung
+    # vorliegt – egal ob neu oder schon vorher vorhanden. None, falls kein
+    # einziger Tag im (sichtbaren, änderbaren) Speiseplan bestellt ist. Für
+    # die "bestellt bis"-Angabe in der Lauf-Zusammenfassung (main()).
+    bestellt_bis: Optional[date] = None
+
+
 def bestelle_fuer_kind(
     p,
     pw_cfg: PlaywrightConfig,
@@ -669,7 +685,7 @@ def bestelle_fuer_kind(
     dry_run: bool,
     schulferien: Optional[list[tuple[date, date]]] = None,
     ntfy_cfg: Optional[NtfyConfig] = None,
-) -> list[tuple[str, str]]:
+) -> KindErgebnis:
     """Führt den kompletten Ablauf (Login, Auswahl, Bestätigung) für ein Kind
     in einer eigenen Browser-Session gegen dessen eigenen Account aus.
 
@@ -679,8 +695,8 @@ def bestelle_fuer_kind(
     Fehlschläge werden von main() gemeldet, da dort über alle Kinder hinweg
     entschieden wird, ob zusätzlich eine Sammel-Nachricht sinnvoll ist.
 
-    Gibt die Liste der neu bestellten (Tag, Gericht)-Paare zurück – main()
-    braucht das zusätzlich für die Lauf-Zusammenfassung auf NTFY_STATUS_TOPIC.
+    Gibt ein KindErgebnis zurück – main() braucht das zusätzlich für die
+    Lauf-Zusammenfassung auf NTFY_STATUS_TOPIC.
     """
     browser, context = erstelle_browser_context(p, pw_cfg)
     page = context.new_page()
@@ -689,14 +705,20 @@ def bestelle_fuer_kind(
         menueplan = lese_menueplan(page, schulferien)
 
         neue_bestellungen: list[tuple[str, str]] = []
+        bestellte_tage: list[str] = []
         for tag, gerichte in menueplan.items():
             optionen = waehle_gericht_regelbasiert(gerichte, kind)
             gericht = waehle_gericht(tag, optionen, kind, api_key)
             if dry_run:
                 log.info("[DRY RUN] Würde bestellen: %s / %s -> %s", tag, kind.name, gericht)
                 neue_bestellungen.append((tag, gericht))
-            elif bestelle_gericht(page, tag, kind, gericht):
-                neue_bestellungen.append((tag, gericht))
+                bestellte_tage.append(tag)
+            else:
+                ist_bestellt, ist_neu = bestelle_gericht(page, tag, kind, gericht)
+                if ist_neu:
+                    neue_bestellungen.append((tag, gericht))
+                if ist_bestellt:
+                    bestellte_tage.append(tag)
 
         if not dry_run:
             bestellung_abschliessen(page)
@@ -715,7 +737,8 @@ def bestelle_fuer_kind(
                 titel = f"Bestellt: {kind.name}"
             sende_ntfy_nachricht(ntfy_cfg, titel, uebersicht, tags=["white_check_mark"])
 
-        return neue_bestellungen
+        bestellt_bis = max((_parse_tag_datum(t) for t in bestellte_tage), default=None)
+        return KindErgebnis(neue_bestellungen=neue_bestellungen, bestellt_bis=bestellt_bis)
 
     except PWTimeout as e:
         log.error("Timeout beim Warten auf ein Element für %s – vermutlich falscher Selektor: %s", kind.name, e)
@@ -765,12 +788,11 @@ def main() -> None:
     # nicht verhindern; am Ende wird trotzdem ein Fehler gemeldet (wichtig für
     # Cron-Benachrichtigungen).
     fehlgeschlagen: list[str] = []
-    anzahl_neue_bestellungen: dict[str, int] = {}
+    ergebnisse: dict[str, KindErgebnis] = {}
     with sync_playwright() as p:
         for kind in kinder:
             try:
-                neue_bestellungen = bestelle_fuer_kind(p, pw_cfg, kind, api_key, dry_run, schulferien, ntfy_cfg)
-                anzahl_neue_bestellungen[kind.name] = len(neue_bestellungen)
+                ergebnisse[kind.name] = bestelle_fuer_kind(p, pw_cfg, kind, api_key, dry_run, schulferien, ntfy_cfg)
             except Exception as e:
                 log.exception("Ablauf für %s fehlgeschlagen.", kind.name)
                 fehlgeschlagen.append(kind.name)
@@ -787,14 +809,19 @@ def main() -> None:
     # für eine Home-Assistant-Automation, die den Zeitpunkt des letzten Laufs
     # unabhängig vom Bestellergebnis auswerten will.
     if ntfy_cfg.status_topic:
-        zeilen = [f"{name}: {n} neu bestellt" for name, n in anzahl_neue_bestellungen.items()]
+        zeilen = []
+        for name, ergebnis in ergebnisse.items():
+            zeile = f"{name}: {len(ergebnis.neue_bestellungen)} neu bestellt"
+            if ergebnis.bestellt_bis:
+                zeile += f", bestellt bis {ergebnis.bestellt_bis.strftime('%d.%m.%y')}"
+            zeilen.append(zeile)
         zeilen += [f"{name}: fehlgeschlagen" for name in fehlgeschlagen]
         status_text = "\n".join(zeilen) if zeilen else "Keine Kinder konfiguriert."
         if dry_run:
             status_text = "[DRY RUN]\n" + status_text
         if fehlgeschlagen:
             tag = "x"
-        elif any(anzahl_neue_bestellungen.values()):
+        elif any(len(e.neue_bestellungen) for e in ergebnisse.values()):
             tag = "white_check_mark"
         else:
             tag = "information_source"
