@@ -2,6 +2,7 @@ version: "3.8"
 
 services:
   gfb-lunch-order:
+    image: ghcr.io/sebastiansucker/kantinen-kobold:latest
     build: .
     container_name: gfb-lunch-order
     restart: unless-stopped
