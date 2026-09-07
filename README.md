@@ -1,8 +1,16 @@
 # GFB Lunch Order – automatische Mittagessen-Bestellung
 
 Automatisiert die wöchentliche Bestellung auf `bestellung-gfb-catering.de`
-für mehrere Kinder, mit regelbasierter Vorfilterung (Ausschlüsse wie "kein Fisch")
-und KI-gestützter Auswahl (Claude API) unter den verbleibenden Optionen.
+für mehrere Kinder. Jedes Kind hat einen eigenen GFB-Catering-Account – das
+Skript loggt sich für jedes Kind separat ein und durchläuft den kompletten
+Ablauf einmal pro Account.
+
+Die Gerichtsauswahl ist **rein regelbasiert möglich, ganz ohne KI**: harte
+Ausschlüsse (z. B. "kein Fisch", "kein Fleisch" – erkannt über das
+Kost-Kennzeichen, das die Seite jedem Gericht mitgibt) plus eine
+Kategorie-Präferenz (z. B. "möglichst DGE, sonst Classic, sonst BIO-Veggie").
+Optional kann stattdessen die Claude-API anhand freier Text-Vorlieben
+entscheiden – pro Kind wählbar, siehe "Kinder & Regeln anpassen".
 
 > **Hinweis zur Wiederverwendbarkeit:** Die Selektoren sind spezifisch für das
 > Bestellportal `bestellung-gfb-catering.de`. Das Projekt eignet sich daher
@@ -13,27 +21,56 @@ und KI-gestützter Auswahl (Claude API) unter den verbleibenden Optionen.
 > dem Einsatz die Nutzungsbedingungen des jeweiligen Bestellportals prüfen –
 > manche Anbieter untersagen automatisierte Zugriffe explizit.
 
-## Status: Gerüst – noch nicht einsatzbereit
+## Status: Kompletter Ablauf end-to-end bestätigt
 
-Ich konnte die Zielseite noch nicht live einsehen (kein verbundener Browser).
-Alle mit `# TODO` markierten Stellen in `order_lunch.py` sind Platzhalter für
-CSS-Selektoren / Texte, die zur echten Seite passen müssen. So findest du sie:
+Login, Speiseplan-Auslesen, Gerichtsauswahl und Bestellbestätigung wurden
+per Playwright live gegen die echte Seite geprüft und die Selektoren in
+`order_lunch.py` entsprechend aktualisiert:
 
-1. Seite im Chrome öffnen, einloggen.
-2. Rechtsklick auf das jeweilige Element (Login-Feld, Menüplan-Tag, Gericht,
-   Bestätigungs-Button) → **Untersuchen**.
-3. Den passenden Selektor (id, class, text) in `order_lunch.py` eintragen.
+- Benutzername: `input#benutzername` (Angular `formcontrolname="login"`)
+- Passwort: `input#passwort` (Angular `formcontrolname="password"`)
+- Login-Button: `<button>Anmelden</button>`
+- Der Bestellbereich der App heißt durchgängig **"Speiseplan"**, nicht
+  "Menüplan" wie ursprünglich vermutet.
+- Ein Tag im Speiseplan ist `div.speiseplan-tagWbp`, darin mehrere
+  `.speiseplanMenu`-Karten (Kategorie z. B. "DGE"/"Classic"/"BIO-Veggie" +
+  Beschreibung) mit je einem Bestell-Icon-Button
+  `[data-testid="order-einzeln"]` (Zustände: `add` = bestellbar,
+  `check` = bereits bestellt, Klasse `disabled` = Frist abgelaufen).
+- Der Warenkorb (`#/warenkorb`) zeigt ausstehende Änderungen und einen
+  Button "Zum genannten Preis bestätigen" zum endgültigen Abschicken.
+  **Wichtig:** Der Warenkorb wird nur clientseitig in der laufenden
+  Browser-Sitzung gehalten – Login, Auswahl und Bestätigung müssen in
+  einer durchgehenden Playwright-Session laufen (wie in `main()`).
+- Mit einer echten Testbestellung (ein Gericht, ein Tag) end-to-end
+  verifiziert; Erfolgstext nach dem Bestätigen: "Vielen Dank. Die
+  Bestellung für den angegebenen Zeitraum wurde erfolgreich im System
+  hinterlegt."
+- Jedes Gericht trägt ein Kost-Kennzeichen (`K`/`F`/`G`) als ersten
+  Buchstaben in der letzten Klammer der Beschreibung, live bestätigt anhand
+  des Blatt-/Fisch-Icons neben dem Gericht sowie der Allergene-Legende der
+  Seite (Fisch = Allergen IV). Wird für regelbasierte Fisch-/Fleisch-
+  Ausschlüsse genutzt, siehe "Kinder & Regeln anpassen".
+- `lese_menueplan()` wartet nach dem Öffnen des Speiseplans explizit auf die
+  erste sichtbare Tag-Karte (nicht nur auf `networkidle`) – Angular rendert
+  die Karten clientseitig, das kann nach Ende der Netzwerk-Requests noch
+  etwas dauern (live als Race Condition beobachtet, sonst leerer Speiseplan).
 
-**Alternative:** Wenn du die Claude-in-Chrome-Erweiterung installierst und
-verbindest, kann ich die Seite (ohne deine Zugangsdaten selbst einzugeben)
-inspizieren und die Selektoren direkt für dich ausfüllen.
+Da jedes Kind einen eigenen Account hat (kein gemeinsamer Account mit
+Kind-Umschaltung), läuft `main()` den kompletten Ablauf separat pro Kind in
+einer eigenen Playwright-Session (`bestelle_fuer_kind()`). Schlägt ein
+Account fehl, werden die übrigen Kinder trotzdem weiterverarbeitet; am Ende
+des Laufs wird ein Fehler gemeldet, falls mindestens ein Account
+fehlgeschlagen ist (wichtig für Cron-Benachrichtigungen).
 
 ## Setup
 
 ```bash
 cp .env.example .env
-# .env mit echten Werten füllen (Login, Anthropic API-Key)
-# DRY_RUN=true lassen, bis die Selektoren geprüft sind!
+# .env mit echten Werten füllen (Anthropic API-Key)
+cp config.json.example config.json
+# config.json mit den echten Zugangsdaten pro Kind füllen (siehe unten)
+# DRY_RUN=true lassen, bis der erste Testlauf geprüft ist!
 
 docker compose build
 docker compose up -d
@@ -57,17 +94,19 @@ steuern, ohne den Code anzufassen:
 | `PLAYWRIGHT_TRACE`                 | `false`       | `true` = Playwright-Trace nach `trace.zip` aufzeichnen (mit `playwright show-trace trace.zip` auswertbar) |
 | `DATA_DIR`                         | `/data`       | Zielverzeichnis für Screenshots/Trace/Logs bei Fehlern   |
 
-**Tipp beim Prüfen der TODO-Selektoren:** `PLAYWRIGHT_HEADLESS=false` und
-`PLAYWRIGHT_TRACE=true` setzen, Skript lokal (außerhalb des Containers)
-laufen lassen und den Ablauf im sichtbaren Browser bzw. anschließend per
-Trace-Viewer nachvollziehen.
+**Tipp zum Debuggen:** `PLAYWRIGHT_HEADLESS=false` und `PLAYWRIGHT_TRACE=true`
+setzen, Skript lokal (außerhalb des Containers) laufen lassen und den Ablauf
+im sichtbaren Browser bzw. anschließend per Trace-Viewer nachvollziehen –
+z. B. falls die Seite ihr Layout ändert und Selektoren angepasst werden
+müssen.
 
 ## Testen ohne echte Bestellung
 
 Solange `DRY_RUN=true` in `.env` gesetzt ist, wird nur geloggt, welches
 Gericht für welches Kind an welchem Tag gewählt würde – es wird **nichts**
-tatsächlich abgeschickt. Erst wenn die Selektoren geprüft sind und die
-Log-Ausgabe plausibel aussieht, auf `DRY_RUN=false` umstellen.
+tatsächlich abgeschickt. Empfehlung vor der ersten produktiven Nutzung mit
+neuer/geänderter Konfiguration: Log-Ausgabe im Dry-Run prüfen, bevor auf
+`DRY_RUN=false` umgestellt wird.
 
 ## Kinder & Regeln anpassen
 
@@ -75,14 +114,45 @@ Log-Ausgabe plausibel aussieht, auf `DRY_RUN=false` umstellen.
 cp config.json.example config.json
 ```
 
-Dann `config.json` anpassen (Name, Ausschlüsse, Vorlieben pro Kind):
+Dann `config.json` anpassen (Zugangsdaten, Ausschlüsse, Vorlieben pro Kind).
+Jedes Kind hat einen eigenen GFB-Catering-Account:
 
 ```json
 [
-  { "name": "Kind 1", "ausschluesse": ["Fisch"], "vorlieben": "mag lieber vegetarisch" },
-  { "name": "Kind 2", "ausschluesse": ["Fisch", "Schweinefleisch"], "vorlieben": "" }
+  {
+    "name": "Kind 1",
+    "benutzername": "kundennummer-oder-login-kind-1",
+    "passwort": "passwort-kind-1",
+    "ausschluesse": ["Fisch", "Fleisch"],
+    "bevorzugte_kategorien": ["DGE", "Classic", "BIO-Veggie"],
+    "vorlieben": ""
+  },
+  {
+    "name": "Kind 2",
+    "benutzername": "kundennummer-oder-login-kind-2",
+    "passwort": "passwort-kind-2",
+    "ausschluesse": ["Fisch"],
+    "bevorzugte_kategorien": [],
+    "vorlieben": "mag lieber vegetarisch, keine scharfen Gerichte"
+  }
 ]
 ```
+
+- **`ausschluesse`**: "Fisch" und "Fleisch" werden über das Kost-Kennzeichen
+  erkannt, das die Seite jedem Gericht als ersten Buchstaben in der letzten
+  Klammer der Beschreibung mitgibt (`K` = vegetarisch, `F` = Fisch,
+  `G` = Fleisch – z. B. sichtbar am Blatt-/Fisch-Icon neben dem Gericht).
+  Das ist zuverlässiger als eine Textsuche, da Gerichtnamen wie
+  "Lachswürfel" oder "Hähnchenragout" die Wörter "Fisch"/"Fleisch" gar
+  nicht enthalten. Alle anderen Einträge (z. B. `"Nüsse"`) werden weiterhin
+  als Textsuche in der Beschreibung geprüft.
+- **`bevorzugte_kategorien`**: Priorisierte Liste, z. B.
+  `["DGE", "Classic", "BIO-Veggie"]` für "möglichst gesund" (DGE = von der
+  Deutschen Gesellschaft für Ernährung empfohlene Linie). Es gewinnt die
+  erste Kategorie, die nach den Ausschlüssen noch übrig ist – **komplett
+  regelbasiert, keine KI/API-Key nötig**. Leer lassen (`[]`), um
+  stattdessen die Claude-API anhand von `vorlieben` entscheiden zu lassen
+  (siehe Kind 2 im Beispiel oben).
 
 Der Pfad zur Config-Datei kann über die Umgebungsvariable `KINDER_CONFIG`
 gesetzt werden (Default: `config.json`). `config.json` liegt in `.gitignore`
@@ -90,12 +160,16 @@ und wird nicht mit ins Repo übernommen.
 
 ## Sicherheit
 
-- Zugangsdaten liegen nur in `.env` (nicht ins Git-Repo committen, `.env` in
-  `.gitignore` aufnehmen).
-- Für produktiven Einsatz auf Unraid: `.env` idealerweise über Unraid-Secrets
-  oder eine restriktive Datei-Berechtigung absichern statt Klartext im Share.
-- Bei Fehlern wird automatisch ein Screenshot nach `/data/error_screenshot.png`
-  geschrieben – hilfreich zum Debuggen fehlgeschlagener Selektoren.
+- **`config.json` enthält Klartext-Zugangsdaten für zwei echte Accounts** (ein
+  Account pro Kind) und darf niemals committet werden – liegt bereits in
+  `.gitignore`, trotzdem vor jedem `git add`/Commit gegenprüfen.
+- Für produktiven Einsatz auf Unraid: `config.json` idealerweise über
+  Unraid-Secrets oder eine restriktive Datei-Berechtigung absichern statt
+  Klartext im Share.
+- Bei Fehlern wird automatisch ein Screenshot nach
+  `/data/error_screenshot_<Kindname>.png` geschrieben – hilfreich zum
+  Debuggen fehlgeschlagener Selektoren, enthält aber ggf. personenbezogene
+  Bestelldaten und sollte entsprechend behandelt werden.
 
 ## Cron-Zeitpunkt ändern
 
