@@ -25,7 +25,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
-from playwright.sync_api import sync_playwright, Page, TimeoutError as PWTimeout
+from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page, TimeoutError as PWTimeout
 import httpx
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -34,6 +34,61 @@ log = logging.getLogger("gfb-lunch-order")
 BASE_URL = "https://bestellung-gfb-catering.de/#/home"
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL = "claude-sonnet-4-6"  # ggf. auf aktuelles Modell anpassen
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    return os.environ.get(name, str(default)).strip().lower() in ("1", "true", "yes")
+
+
+@dataclass
+class PlaywrightConfig:
+    """Browser-/Kontext-Einstellungen für Playwright, per Umgebungsvariable steuerbar.
+
+    Solange die TODO-Selektoren in diesem Skript noch nicht gegen die echte
+    Seite geprüft sind, hilft vor allem PLAYWRIGHT_HEADLESS=false (Browser
+    sichtbar) und PLAYWRIGHT_TRACE=true (playwright show-trace zum Debuggen).
+    """
+
+    headless: bool = True
+    slow_mo_ms: int = 0
+    action_timeout_ms: int = 15000
+    navigation_timeout_ms: int = 30000
+    locale: str = "de-DE"
+    timezone_id: str = "Europe/Berlin"
+    viewport_width: int = 1280
+    viewport_height: int = 900
+    trace: bool = False
+    data_dir: str = "/data"
+
+    @classmethod
+    def from_env(cls) -> "PlaywrightConfig":
+        return cls(
+            headless=_env_bool("PLAYWRIGHT_HEADLESS", True),
+            slow_mo_ms=int(os.environ.get("PLAYWRIGHT_SLOWMO_MS", "0")),
+            action_timeout_ms=int(os.environ.get("PLAYWRIGHT_ACTION_TIMEOUT_MS", "15000")),
+            navigation_timeout_ms=int(os.environ.get("PLAYWRIGHT_NAVIGATION_TIMEOUT_MS", "30000")),
+            locale=os.environ.get("PLAYWRIGHT_LOCALE", "de-DE"),
+            timezone_id=os.environ.get("PLAYWRIGHT_TIMEZONE", "Europe/Berlin"),
+            viewport_width=int(os.environ.get("PLAYWRIGHT_VIEWPORT_WIDTH", "1280")),
+            viewport_height=int(os.environ.get("PLAYWRIGHT_VIEWPORT_HEIGHT", "900")),
+            trace=_env_bool("PLAYWRIGHT_TRACE", False),
+            data_dir=os.environ.get("DATA_DIR", "/data"),
+        )
+
+
+def erstelle_browser_context(p, cfg: PlaywrightConfig) -> tuple[Browser, BrowserContext]:
+    """Startet Chromium und einen Kontext gemäß PlaywrightConfig."""
+    browser = p.chromium.launch(headless=cfg.headless, slow_mo=cfg.slow_mo_ms)
+    context = browser.new_context(
+        locale=cfg.locale,
+        timezone_id=cfg.timezone_id,
+        viewport={"width": cfg.viewport_width, "height": cfg.viewport_height},
+    )
+    context.set_default_timeout(cfg.action_timeout_ms)
+    context.set_default_navigation_timeout(cfg.navigation_timeout_ms)
+    if cfg.trace:
+        context.tracing.start(screenshots=True, snapshots=True, sources=True)
+    return browser, context
 
 
 @dataclass
@@ -174,10 +229,12 @@ def main() -> None:
     dry_run = os.environ.get("DRY_RUN", "true").lower() == "true"
     config_pfad = os.environ.get("KINDER_CONFIG", "config.json")
     kinder = lade_kinder(config_pfad)
+    pw_cfg = PlaywrightConfig.from_env()
+    os.makedirs(pw_cfg.data_dir, exist_ok=True)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        browser, context = erstelle_browser_context(p, pw_cfg)
+        page = context.new_page()
         try:
             login(page, username, password)
             menueplan = lese_menueplan(page)
@@ -198,9 +255,11 @@ def main() -> None:
 
         except PWTimeout as e:
             log.error("Timeout beim Warten auf ein Element – vermutlich falscher Selektor: %s", e)
-            page.screenshot(path="/data/error_screenshot.png")
+            page.screenshot(path=os.path.join(pw_cfg.data_dir, "error_screenshot.png"))
             raise
         finally:
+            if pw_cfg.trace:
+                context.tracing.stop(path=os.path.join(pw_cfg.data_dir, "trace.zip"))
             browser.close()
 
 

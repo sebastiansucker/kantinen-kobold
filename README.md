@@ -39,6 +39,29 @@ docker compose build
 docker compose up -d
 ```
 
+## Playwright-Konfiguration
+
+Das Browser-Verhalten wird zentral in `PlaywrightConfig` (`order_lunch.py`)
+gebündelt und lässt sich über Umgebungsvariablen (siehe `.env.example`)
+steuern, ohne den Code anzufassen:
+
+| Variable                          | Default        | Bedeutung                                              |
+|------------------------------------|---------------|---------------------------------------------------------|
+| `PLAYWRIGHT_HEADLESS`              | `true`        | `false` = Browser sichtbar starten (Selektoren prüfen)   |
+| `PLAYWRIGHT_SLOWMO_MS`             | `0`           | Aktionen künstlich verlangsamen (ms)                     |
+| `PLAYWRIGHT_ACTION_TIMEOUT_MS`     | `15000`       | Timeout für einzelne Aktionen (Klick, Fill, …)           |
+| `PLAYWRIGHT_NAVIGATION_TIMEOUT_MS` | `30000`       | Timeout für Seitennavigationen                           |
+| `PLAYWRIGHT_LOCALE`                | `de-DE`       | Browser-Locale                                           |
+| `PLAYWRIGHT_TIMEZONE`              | `Europe/Berlin` | Browser-Zeitzone                                       |
+| `PLAYWRIGHT_VIEWPORT_WIDTH/HEIGHT` | `1280x900`    | Viewport-Größe                                           |
+| `PLAYWRIGHT_TRACE`                 | `false`       | `true` = Playwright-Trace nach `trace.zip` aufzeichnen (mit `playwright show-trace trace.zip` auswertbar) |
+| `DATA_DIR`                         | `/data`       | Zielverzeichnis für Screenshots/Trace/Logs bei Fehlern   |
+
+**Tipp beim Prüfen der TODO-Selektoren:** `PLAYWRIGHT_HEADLESS=false` und
+`PLAYWRIGHT_TRACE=true` setzen, Skript lokal (außerhalb des Containers)
+laufen lassen und den Ablauf im sichtbaren Browser bzw. anschließend per
+Trace-Viewer nachvollziehen.
+
 ## Testen ohne echte Bestellung
 
 Solange `DRY_RUN=true` in `.env` gesetzt ist, wird nur geloggt, welches
