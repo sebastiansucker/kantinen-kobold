@@ -55,6 +55,12 @@ per Playwright live gegen die echte Seite geprüft und die Selektoren in
   erste sichtbare Tag-Karte (nicht nur auf `networkidle`) – Angular rendert
   die Karten clientseitig, das kann nach Ende der Netzwerk-Requests noch
   etwas dauern (live als Race Condition beobachtet, sonst leerer Speiseplan).
+- Der Schulferien-Filter (`NUR_AUSSERHALB_SCHULFERIEN`, siehe unten) wurde
+  live gegen die echte DOM-Struktur verifiziert (ein Testtag wurde mit einem
+  synthetischen Zeitraum korrekt übersprungen, alle anderen Tage blieben
+  erhalten) – ein Testlauf mit den echten Brandenburg-2026-Terminen aus
+  `schulferien.json` steht noch aus, da aktuell kein Ferientag im sichtbar/
+  bestellbaren Zeitfenster der Seite liegt (nächster: Herbstferien ab 19.10.).
 
 Da jedes Kind einen eigenen Account hat (kein gemeinsamer Account mit
 Kind-Umschaltung), läuft `main()` den kompletten Ablauf separat pro Kind in
@@ -157,6 +163,41 @@ Jedes Kind hat einen eigenen GFB-Catering-Account:
 Der Pfad zur Config-Datei kann über die Umgebungsvariable `KINDER_CONFIG`
 gesetzt werden (Default: `config.json`). `config.json` liegt in `.gitignore`
 und wird nicht mit ins Repo übernommen.
+
+## Schulferien
+
+Standardmäßig wird **nicht in den Schulferien bestellt**
+(`NUR_AUSSERHALB_SCHULFERIEN=true`), da während der Ferien meist keine
+Schulverpflegung stattfindet. Es wird davon ausgegangen, dass alle Kinder im
+selben Bundesland zur Schule gehen – das Bundesland ist daher global über
+`BUNDESLAND` (Default `BB`/Brandenburg) konfigurierbar, nicht pro Kind.
+
+Die Ferientermine stehen in [`schulferien.json`](schulferien.json), pro
+Bundesland als Liste von Zeiträumen (`von`/`bis`, inklusive) – einzelne
+bewegliche Ferientage/Brückentage (z. B. der 26.05.2026 nach Christi
+Himmelfahrt) werden genauso als Eintrag mit `von == bis` abgebildet und
+zählen als vollwertiger Ferientag:
+
+```json
+{
+  "BB": [
+    { "name": "Sommerferien 2026", "von": "2026-07-09", "bis": "2026-08-22" },
+    { "name": "Beweglicher Ferientag 2026 (Brückentag nach Christi Himmelfahrt)", "von": "2026-05-26", "bis": "2026-05-26" }
+  ]
+}
+```
+
+Diese Datei liegt (anders als `config.json`) im Repo, da sie keine
+Zugangsdaten enthält, sondern nur öffentliche Ferientermine – muss aber
+**jährlich gepflegt/ergänzt werden**. Aktuell ist nur Brandenburg (`BB`) für
+2026 hinterlegt; für andere Bundesländer oder Jahre müssen entsprechende
+Einträge ergänzt werden (Quelle z. B.
+[schulferien.org](https://www.schulferien.org/deutschland/ferien/brandenburg/)).
+Fehlt ein Bundesland in der Datei, wird das nur geloggt (keine Ferienprüfung
+für dieses Bundesland) statt das Skript abzubrechen.
+
+Auf `NUR_AUSSERHALB_SCHULFERIEN=false` setzen, um auch in den Ferien zu
+bestellen (z. B. bei Ferienbetreuung mit Verpflegung).
 
 ## Sicherheit
 
