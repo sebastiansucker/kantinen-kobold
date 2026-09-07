@@ -6,7 +6,9 @@ Jedes Kind hat einen eigenen GFB-Catering-Account (kein gemeinsamer Account
 mit Kind-Auswahl). Der komplette Ablauf läuft daher separat pro Kind, jeweils
 in einer eigenen Playwright-Session:
   1. Login auf https://bestellung-gfb-catering.de/ mit den Zugangsdaten des Kindes
-  2. Speiseplan der kommenden Woche auslesen (pro Wochentag verfügbare Gerichte)
+  2. Speiseplan der kommenden Woche auslesen (pro Wochentag verfügbare
+     Gerichte), Tage in den Schulferien werden dabei standardmäßig
+     übersprungen (siehe NUR_AUSSERHALB_SCHULFERIEN, schulferien.json)
   3. Harte Regeln anwenden (Ausschlüsse wie Fisch/Fleisch), danach das
      passende Gericht wählen – regelbasiert per Kategorie-Präferenz
      (bevorzugte_kategorien, z. B. "möglichst DGE"), oder falls für ein Kind
@@ -32,6 +34,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Optional
 
 from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page, TimeoutError as PWTimeout
@@ -143,6 +146,41 @@ def lade_kinder(config_pfad: str) -> list[Kind]:
     ]
 
 
+def lade_schulferien(config_pfad: str, bundesland: str) -> list[tuple[date, date]]:
+    """Lädt die Schulferien-Zeiträume für ein Bundesland aus schulferien.json.
+
+    Format (siehe schulferien.json): {"<Bundesland-Kürzel>": [{"name": ...,
+    "von": "YYYY-MM-DD", "bis": "YYYY-MM-DD"}, ...]}. Einzelne bewegliche
+    Ferientage (z. B. Brückentage) werden als Eintrag mit von == bis
+    abgebildet und zählen genauso als Ferientag wie ein mehrtägiger
+    Ferienblock.
+    """
+    with open(config_pfad, encoding="utf-8") as f:
+        rohdaten = json.load(f)
+    eintraege = rohdaten.get(bundesland)
+    if not eintraege:
+        log.warning(
+            "Keine Schulferien-Daten für Bundesland '%s' in %s gefunden – "
+            "es wird nicht auf Schulferien geprüft.", bundesland, config_pfad,
+        )
+        return []
+    return [
+        (date.fromisoformat(eintrag["von"]), date.fromisoformat(eintrag["bis"]))
+        for eintrag in eintraege
+    ]
+
+
+def ist_schulferientag(datum: date, schulferien: list[tuple[date, date]]) -> bool:
+    """Prüft, ob datum in einen der Schulferien-Zeiträume fällt (inklusive)."""
+    return any(von <= datum <= bis for von, bis in schulferien)
+
+
+def _parse_tag_datum(tag: str) -> date:
+    """Parst das Datum aus dem Tag-Label von lese_menueplan(), z. B. "22.09.26 - Dienstag"."""
+    datum_teil = tag.split(" - ", 1)[0]
+    return datetime.strptime(datum_teil, "%d.%m.%y").date()
+
+
 def login(page: Page, username: str, password: str) -> None:
     log.info("Öffne Startseite …")
     page.goto(BASE_URL, wait_until="networkidle")
@@ -159,18 +197,26 @@ def login(page: Page, username: str, password: str) -> None:
     page.locator("#passwort").fill(password)
     page.get_by_role("button", name="Anmelden").click()
 
-    # TODO prüfen: Ohne echte Zugangsdaten konnte der Zustand nach dem Login
-    # nicht live eingesehen werden. Die App nennt den Speiseplan durchgehend
-    # "Speiseplan" (nicht "Menüplan" wie ursprünglich vermutet) – das
-    # folgende Warten muss anhand des echten Post-Login-Screens geprüft werden.
-    page.wait_for_selector("text=Speiseplan", timeout=15000)  # TODO prüfen
+    page.wait_for_selector("text=Speiseplan", timeout=15000)
     log.info("Login erfolgreich.")
 
+    # Nach dem Login erscheint manchmal ein Mitteilungen-Dialog (Angular CDK
+    # Overlay), der die komplette Seite mit einem Backdrop blockiert und
+    # jeden weiteren Klick (z. B. auf "Speiseplan") verhindert - live als
+    # echter Fehlschlag beobachtet. Schließen, falls vorhanden.
+    try:
+        page.get_by_text("Mitteilungen schließen", exact=False).first.click(timeout=3000)
+        log.info("Mitteilungen-Dialog geschlossen.")
+    except PWTimeout:
+        pass  # Kein Dialog vorhanden
 
-def lese_menueplan(page: Page) -> dict:
+
+def lese_menueplan(page: Page, schulferien: Optional[list[tuple[date, date]]] = None) -> dict:
     """
     Liest den Speiseplan aus und gibt nur noch änderbare Tage zurück (Tage,
-    deren Bestellfrist bereits abgelaufen ist, werden übersprungen).
+    deren Bestellfrist bereits abgelaufen ist, werden übersprungen). Ist
+    `schulferien` gesetzt (siehe lade_schulferien()), werden zusätzlich Tage
+    übersprungen, die in die Schulferien fallen.
 
     Per Live-Inspektion bestätigte DOM-Struktur (Angular/Material-App):
       div.speiseplan-tagWbp                          – ein Tag
@@ -202,6 +248,10 @@ def lese_menueplan(page: Page) -> dict:
     tage = page.locator(".speiseplan-tagWbp").all()
     for tag_el in tage:
         tag_name = tag_el.locator(".speiseplanTagLabelNormal strong").inner_text().strip()
+
+        if schulferien and ist_schulferientag(_parse_tag_datum(tag_name), schulferien):
+            log.info("Überspringe %s – Schulferien.", tag_name)
+            continue
 
         menu_els = tag_el.locator(".speiseplanMenu").all()
         aenderbar = any(
@@ -403,14 +453,21 @@ def bestellung_abschliessen(page: Page) -> None:
     log.info("Bestellung abgeschlossen.")
 
 
-def bestelle_fuer_kind(p, pw_cfg: PlaywrightConfig, kind: Kind, api_key: Optional[str], dry_run: bool) -> None:
+def bestelle_fuer_kind(
+    p,
+    pw_cfg: PlaywrightConfig,
+    kind: Kind,
+    api_key: Optional[str],
+    dry_run: bool,
+    schulferien: Optional[list[tuple[date, date]]] = None,
+) -> None:
     """Führt den kompletten Ablauf (Login, Auswahl, Bestätigung) für ein Kind
     in einer eigenen Browser-Session gegen dessen eigenen Account aus."""
     browser, context = erstelle_browser_context(p, pw_cfg)
     page = context.new_page()
     try:
         login(page, kind.benutzername, kind.passwort)
-        menueplan = lese_menueplan(page)
+        menueplan = lese_menueplan(page, schulferien)
 
         for tag, gerichte in menueplan.items():
             optionen = waehle_gericht_regelbasiert(gerichte, kind)
@@ -446,6 +503,15 @@ def main() -> None:
     pw_cfg = PlaywrightConfig.from_env()
     os.makedirs(pw_cfg.data_dir, exist_ok=True)
 
+    # Standardmäßig wird in den Schulferien nicht bestellt (alle Kinder gehen
+    # von der gleichen Annahme aus: gleiches Bundesland für alle Kinder).
+    nur_ausserhalb_schulferien = _env_bool("NUR_AUSSERHALB_SCHULFERIEN", True)
+    schulferien: Optional[list[tuple[date, date]]] = None
+    if nur_ausserhalb_schulferien:
+        bundesland = os.environ.get("BUNDESLAND", "BB")
+        schulferien_pfad = os.environ.get("SCHULFERIEN_CONFIG", "schulferien.json")
+        schulferien = lade_schulferien(schulferien_pfad, bundesland)
+
     # Jedes Kind hat einen eigenen Account -> eigener Login/eigene Session pro
     # Kind. Ein Fehler bei einem Account soll den Lauf für die anderen Kinder
     # nicht verhindern; am Ende wird trotzdem ein Fehler gemeldet (wichtig für
@@ -454,7 +520,7 @@ def main() -> None:
     with sync_playwright() as p:
         for kind in kinder:
             try:
-                bestelle_fuer_kind(p, pw_cfg, kind, api_key, dry_run)
+                bestelle_fuer_kind(p, pw_cfg, kind, api_key, dry_run, schulferien)
             except Exception:
                 log.exception("Ablauf für %s fehlgeschlagen.", kind.name)
                 fehlgeschlagen.append(kind.name)
