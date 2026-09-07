@@ -189,6 +189,10 @@ def lese_menueplan(page: Page) -> dict:
     """
     page.get_by_text("Speiseplan", exact=False).first.click()
     page.wait_for_load_state("networkidle")
+    # networkidle sagt nur, dass keine Requests mehr laufen - Angular braucht
+    # danach noch etwas Zeit, um die Tag-Karten clientseitig zu rendern.
+    # Ohne dieses Warten kann tage weiter unten leer sein (live beobachtet).
+    page.locator(".speiseplan-tagWbp").first.wait_for(state="visible", timeout=15000)
 
     menueplan: dict[str, list[str]] = {}
     tage = page.locator(".speiseplan-tagWbp").all()
