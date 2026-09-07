@@ -76,6 +76,23 @@ docker compose build
 docker compose up -d
 ```
 
+### Vorgebautes Image nutzen
+
+Bei jedem Push auf `main` baut eine GitHub Action
+(`.github/workflows/docker-publish.yml`) das Image automatisch und pusht es
+nach `ghcr.io/sebastiansucker/kantinen-kobold:latest`. Statt lokal zu bauen,
+kann das Image auch direkt gezogen werden:
+
+```bash
+docker pull ghcr.io/sebastiansucker/kantinen-kobold:latest
+docker compose up -d
+```
+
+Das Package ist an dieses (private) Repository gekoppelt und daher ebenfalls
+privat – Zugriff besteht nur mit einem GitHub-Account, der Lesezugriff auf
+das Repo hat (vorher ggf. `docker login ghcr.io -u <github-user>` mit einem
+Personal Access Token, das `read:packages` erlaubt).
+
 ## Playwright-Konfiguration
 
 Das Browser-Verhalten wird zentral in `PlaywrightConfig` (`order_lunch.py`)
