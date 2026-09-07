@@ -268,11 +268,22 @@ Schulverpflegung stattfindet. Es wird davon ausgegangen, dass alle Kinder im
 selben Bundesland zur Schule gehen – das Bundesland ist daher global über
 `BUNDESLAND` (Default `BB`/Brandenburg) konfigurierbar, nicht pro Kind.
 
-Die Ferientermine stehen in [`schulferien.json`](schulferien.json), pro
-Bundesland als Liste von Zeiträumen (`von`/`bis`, inklusive) – einzelne
-bewegliche Ferientage/Brückentage (z. B. der 26.05.2026 nach Christi
-Himmelfahrt) werden genauso als Eintrag mit `von == bis` abgebildet und
-zählen als vollwertiger Ferientag:
+Die Ferientermine kommen standardmäßig **dynamisch** von der öffentlichen
+[OpenHolidays API](https://www.openholidaysapi.org) (`SCHULFERIEN_QUELLE=api`,
+Default) – das aktuelle Jahr und das Folgejahr werden bei jedem Lauf frisch
+abgefragt, inklusive einzelner beweglicher Ferientage/Brückentage (z. B. der
+26.05.2026 nach Christi Himmelfahrt), sodass die Liste **nicht mehr jährlich
+von Hand gepflegt werden muss**. Schlägt die Abfrage fehl (kein
+Netzwerkzugriff, Timeout, API nicht erreichbar), wird automatisch auf die
+lokale Datei [`schulferien.json`](schulferien.json) zurückgefallen und eine
+Warnung geloggt.
+
+Mit `SCHULFERIEN_QUELLE=datei` lässt sich stattdessen ausschließlich die
+lokale Datei verwenden (kein Netzwerkzugriff nötig). Sie ist im gleichen
+Format wie die API-Antwort aufgebaut, pro Bundesland als Liste von
+Zeiträumen (`von`/`bis`, inklusive) – einzelne bewegliche Ferientage werden
+genauso als Eintrag mit `von == bis` abgebildet und zählen als vollwertiger
+Ferientag:
 
 ```json
 {
@@ -284,10 +295,11 @@ zählen als vollwertiger Ferientag:
 ```
 
 Diese Datei liegt (anders als `config.json`) im Repo, da sie keine
-Zugangsdaten enthält, sondern nur öffentliche Ferientermine – muss aber
-**jährlich gepflegt/ergänzt werden**. Aktuell ist nur Brandenburg (`BB`) für
-2026 hinterlegt; für andere Bundesländer oder Jahre müssen entsprechende
-Einträge ergänzt werden (Quelle z. B.
+Zugangsdaten enthält, sondern nur öffentliche Ferientermine – sie dient nur
+noch als Fallback und muss daher nicht mehr aktuell gehalten werden, sofern
+die API erreichbar ist. Aktuell ist nur Brandenburg (`BB`) für 2026
+hinterlegt; für den Fallback-Fall bei anderen Bundesländern oder Jahren
+müssten entsprechende Einträge ergänzt werden (Quelle z. B.
 [schulferien.org](https://www.schulferien.org/deutschland/ferien/brandenburg/)).
 Fehlt ein Bundesland in der Datei, wird das nur geloggt (keine Ferienprüfung
 für dieses Bundesland) statt das Skript abzubrechen.

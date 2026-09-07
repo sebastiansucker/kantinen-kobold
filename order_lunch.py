@@ -8,7 +8,9 @@ in einer eigenen Playwright-Session:
   1. Login auf https://bestellung-gfb-catering.de/ mit den Zugangsdaten des Kindes
   2. Speiseplan der kommenden Woche auslesen (pro Wochentag verfügbare
      Gerichte), Tage in den Schulferien werden dabei standardmäßig
-     übersprungen (siehe NUR_AUSSERHALB_SCHULFERIEN, schulferien.json)
+     übersprungen (siehe NUR_AUSSERHALB_SCHULFERIEN, lade_schulferien() –
+     Termine kommen dynamisch von einer öffentlichen API, mit
+     schulferien.json als Fallback)
   3. Harte Regeln anwenden (Ausschlüsse wie Fisch/Fleisch), danach das
      passende Gericht wählen – regelbasiert per Kategorie-Präferenz
      (bevorzugte_kategorien, z. B. "möglichst DGE"), oder falls für ein Kind
@@ -247,8 +249,53 @@ def lade_kinder(config_pfad: str) -> list[Kind]:
     ]
 
 
-def lade_schulferien(config_pfad: str, bundesland: str) -> list[tuple[date, date]]:
-    """Lädt die Schulferien-Zeiträume für ein Bundesland aus schulferien.json.
+OPENHOLIDAYS_API_URL = "https://openholidaysapi.org/SchoolHolidays"
+
+
+def lade_schulferien_von_api(bundesland: str, jahre: list[int], timeout: float = 10.0) -> list[tuple[date, date]]:
+    """Fragt Schulferien-Zeiträume dynamisch bei der öffentlichen
+    OpenHolidays-API ab (https://www.openholidaysapi.org), statt sie
+    jährlich von Hand pflegen zu müssen. Liefert pro Bundesland automatisch
+    auch einzelne bewegliche Ferientage/Brückentage (z. B. der 26.05.2026)
+    als eigene Einträge mit startDate == endDate, genau wie mehrtägige
+    Ferienblöcke – live gegen BB/2026 verifiziert, inkl. eines beweglichen
+    Ferientags (15.05.2026), der in der lokalen schulferien.json fehlte.
+
+    `jahre` sollte das aktuelle Jahr UND das Folgejahr enthalten, da die API
+    pro Aufruf nur Zeiträume innerhalb von [validFrom, validTo] liefert und
+    die Weihnachtsferien über den Jahreswechsel laufen.
+
+    Wirft eine Exception (z. B. httpx.HTTPError) bei Netzwerk-/HTTP-Fehlern –
+    das Abfangen und Zurückfallen auf die lokale Datei übernimmt
+    lade_schulferien().
+    """
+    zeitraeume: set[tuple[date, date]] = set()
+    for jahr in jahre:
+        resp = httpx.get(
+            OPENHOLIDAYS_API_URL,
+            params={
+                "countryIsoCode": "DE",
+                "languageIsoCode": "DE",
+                "subdivisionCode": f"DE-{bundesland}",
+                "validFrom": f"{jahr}-01-01",
+                "validTo": f"{jahr}-12-31",
+            },
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        for eintrag in resp.json():
+            zeitraeume.add(
+                (date.fromisoformat(eintrag["startDate"]), date.fromisoformat(eintrag["endDate"]))
+            )
+    return sorted(zeitraeume)
+
+
+def lade_schulferien_aus_datei(config_pfad: str, bundesland: str) -> list[tuple[date, date]]:
+    """Lädt die Schulferien-Zeiträume für ein Bundesland aus einer lokalen
+    JSON-Datei (siehe schulferien.json). Dient als Fallback, falls die
+    dynamische Abfrage über lade_schulferien_von_api() fehlschlägt (z. B.
+    kein Netzwerkzugriff), oder wenn explizit SCHULFERIEN_QUELLE=datei
+    gesetzt ist.
 
     Format (siehe schulferien.json): {"<Bundesland-Kürzel>": [{"name": ...,
     "von": "YYYY-MM-DD", "bis": "YYYY-MM-DD"}, ...]}. Einzelne bewegliche
@@ -269,6 +316,37 @@ def lade_schulferien(config_pfad: str, bundesland: str) -> list[tuple[date, date
         (date.fromisoformat(eintrag["von"]), date.fromisoformat(eintrag["bis"]))
         for eintrag in eintraege
     ]
+
+
+def lade_schulferien(bundesland: str, datei_pfad: str, quelle: str = "api") -> list[tuple[date, date]]:
+    """Lädt die Schulferien-Zeiträume für ein Bundesland (Einstiegspunkt, von
+    main() verwendet).
+
+    quelle="api" (Default): fragt dynamisch die öffentliche OpenHolidays-API
+    ab (aktuelles Jahr + Folgejahr) – erfasst automatisch auch bewegliche
+    Ferientage/Brückentage, ohne dass eine Liste jährlich von Hand gepflegt
+    werden muss. Schlägt die Abfrage fehl (Netzwerkproblem, Timeout, HTTP-
+    Fehler, unerwartetes Antwortformat), wird auf die lokale Datei
+    datei_pfad zurückgefallen.
+    quelle="datei": nutzt direkt die lokale Datei, kein Netzwerkzugriff.
+    """
+    if quelle == "datei":
+        return lade_schulferien_aus_datei(datei_pfad, bundesland)
+
+    heute = date.today()
+    try:
+        zeitraeume = lade_schulferien_von_api(bundesland, [heute.year, heute.year + 1])
+        log.info(
+            "Schulferien für Bundesland '%s' dynamisch von der OpenHolidays-API geladen (%d Zeiträume).",
+            bundesland, len(zeitraeume),
+        )
+        return zeitraeume
+    except Exception as e:
+        log.warning(
+            "Schulferien konnten nicht dynamisch von der OpenHolidays-API geladen werden (%s) – "
+            "falle auf lokale Datei %s zurück.", e, datei_pfad,
+        )
+        return lade_schulferien_aus_datei(datei_pfad, bundesland)
 
 
 def ist_schulferientag(datum: date, schulferien: list[tuple[date, date]]) -> bool:
@@ -672,12 +750,15 @@ def main() -> None:
 
     # Standardmäßig wird in den Schulferien nicht bestellt (alle Kinder gehen
     # von der gleichen Annahme aus: gleiches Bundesland für alle Kinder).
+    # Die Termine werden per Default dynamisch von einer öffentlichen API
+    # geladen (siehe lade_schulferien()), mit lokaler Datei als Fallback.
     nur_ausserhalb_schulferien = _env_bool("NUR_AUSSERHALB_SCHULFERIEN", True)
     schulferien: Optional[list[tuple[date, date]]] = None
     if nur_ausserhalb_schulferien:
         bundesland = os.environ.get("BUNDESLAND", "BB")
         schulferien_pfad = os.environ.get("SCHULFERIEN_CONFIG", "schulferien.json")
-        schulferien = lade_schulferien(schulferien_pfad, bundesland)
+        schulferien_quelle = os.environ.get("SCHULFERIEN_QUELLE", "api").strip().lower()
+        schulferien = lade_schulferien(bundesland, schulferien_pfad, schulferien_quelle)
 
     # Jedes Kind hat einen eigenen Account -> eigener Login/eigene Session pro
     # Kind. Ein Fehler bei einem Account soll den Lauf für die anderen Kinder
