@@ -51,6 +51,10 @@ per Playwright live gegen die echte Seite geprüft und die Selektoren in
   des Blatt-/Fisch-Icons neben dem Gericht sowie der Allergene-Legende der
   Seite (Fisch = Allergen IV). Wird für regelbasierte Fisch-/Fleisch-
   Ausschlüsse genutzt, siehe "Kinder & Regeln anpassen".
+- `lese_menueplan()` wartet nach dem Öffnen des Speiseplans explizit auf die
+  erste sichtbare Tag-Karte (nicht nur auf `networkidle`) – Angular rendert
+  die Karten clientseitig, das kann nach Ende der Netzwerk-Requests noch
+  etwas dauern (live als Race Condition beobachtet, sonst leerer Speiseplan).
 
 Da jedes Kind einen eigenen Account hat (kein gemeinsamer Account mit
 Kind-Umschaltung), läuft `main()` den kompletten Ablauf separat pro Kind in
@@ -90,17 +94,19 @@ steuern, ohne den Code anzufassen:
 | `PLAYWRIGHT_TRACE`                 | `false`       | `true` = Playwright-Trace nach `trace.zip` aufzeichnen (mit `playwright show-trace trace.zip` auswertbar) |
 | `DATA_DIR`                         | `/data`       | Zielverzeichnis für Screenshots/Trace/Logs bei Fehlern   |
 
-**Tipp beim Prüfen der TODO-Selektoren:** `PLAYWRIGHT_HEADLESS=false` und
-`PLAYWRIGHT_TRACE=true` setzen, Skript lokal (außerhalb des Containers)
-laufen lassen und den Ablauf im sichtbaren Browser bzw. anschließend per
-Trace-Viewer nachvollziehen.
+**Tipp zum Debuggen:** `PLAYWRIGHT_HEADLESS=false` und `PLAYWRIGHT_TRACE=true`
+setzen, Skript lokal (außerhalb des Containers) laufen lassen und den Ablauf
+im sichtbaren Browser bzw. anschließend per Trace-Viewer nachvollziehen –
+z. B. falls die Seite ihr Layout ändert und Selektoren angepasst werden
+müssen.
 
 ## Testen ohne echte Bestellung
 
 Solange `DRY_RUN=true` in `.env` gesetzt ist, wird nur geloggt, welches
 Gericht für welches Kind an welchem Tag gewählt würde – es wird **nichts**
-tatsächlich abgeschickt. Erst wenn die Selektoren geprüft sind und die
-Log-Ausgabe plausibel aussieht, auf `DRY_RUN=false` umstellen.
+tatsächlich abgeschickt. Empfehlung vor der ersten produktiven Nutzung mit
+neuer/geänderter Konfiguration: Log-Ausgabe im Dry-Run prüfen, bevor auf
+`DRY_RUN=false` umgestellt wird.
 
 ## Kinder & Regeln anpassen
 

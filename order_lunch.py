@@ -7,18 +7,22 @@ mit Kind-Auswahl). Der komplette Ablauf läuft daher separat pro Kind, jeweils
 in einer eigenen Playwright-Session:
   1. Login auf https://bestellung-gfb-catering.de/ mit den Zugangsdaten des Kindes
   2. Speiseplan der kommenden Woche auslesen (pro Wochentag verfügbare Gerichte)
-  3. Harte Regeln anwenden (Ausschlüsse), danach per Claude-API das passende
-     Gericht aus den verbleibenden Optionen wählen lassen
+  3. Harte Regeln anwenden (Ausschlüsse wie Fisch/Fleisch), danach das
+     passende Gericht wählen – regelbasiert per Kategorie-Präferenz
+     (bevorzugte_kategorien, z. B. "möglichst DGE"), oder falls für ein Kind
+     keine gesetzt ist, per Claude-API anhand freier Vorlieben
   4. Auswahl für jeden Tag eintragen und Bestellung abschicken
 
 WICHTIG: Der komplette Ablauf (login(), lese_menueplan(), bestelle_gericht(),
 bestellung_abschliessen()) wurde per Playwright live gegen die echte Seite
-geprüft und mit einer echten Testbestellung (ein Gericht, ein Tag) end-to-end
-bestätigt.
+geprüft und mit mehreren echten Testbestellungen end-to-end bestätigt,
+inklusive der regelbasierten Fisch-/Fleisch-Ausschlüsse und Kategorie-
+Präferenz (siehe Kind.bevorzugte_kategorien, waehle_gericht()).
 
 Aufruf: python order_lunch.py
 Benötigte Umgebungsvariablen (siehe .env.example):
-  ANTHROPIC_API_KEY
+  ANTHROPIC_API_KEY (optional – nur nötig, wenn mindestens ein Kind in der
+  Konfiguration keine bevorzugte_kategorien gesetzt hat)
 Zugangsdaten pro Kind stehen in der Kinder-Konfiguration, siehe
 config.json.example (Feld KINDER_CONFIG, Default config.json).
 """
