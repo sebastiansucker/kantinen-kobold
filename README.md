@@ -158,6 +158,37 @@ tatsächlich abgeschickt. Empfehlung vor der ersten produktiven Nutzung mit
 neuer/geänderter Konfiguration: Log-Ausgabe im Dry-Run prüfen, bevor auf
 `DRY_RUN=false` umgestellt wird.
 
+## Benachrichtigungen (ntfy.sh)
+
+Optional lässt sich nach jedem Kind eine Push-Benachrichtigung über
+[ntfy.sh](https://ntfy.sh) verschicken (Erfolg mit den neu bestellten
+Gerichten pro Tag, oder Fehlschlag mit Kind-Name und Fehlergrund) – nützlich,
+da das Ergebnis eines Cron-Laufs sonst nur im Log landet. Standardmäßig
+deaktiviert (kein `NTFY_TOPIC` gesetzt = keine Nachrichten, keine Änderung am
+bisherigen Verhalten).
+
+Einrichtung:
+
+1. In `.env` ein `NTFY_TOPIC` setzen, z. B. `gfb-bestellung-<zufallsstring>`
+   (ein schwer erratbarer Name, da unauthentifizierte Topics auf ntfy.sh
+   öffentlich lesbar sind für jeden, der den Topic-Namen kennt).
+2. Zum Empfangen die [ntfy-App](https://ntfy.sh/#) (Android/iOS/Desktop) oder
+   den Browser installieren/öffnen und dort das Topic abonnieren (App: "+"
+   → Topic-Namen eingeben; Browser: `https://ntfy.sh/<topic>` öffnen, "Subscribe").
+3. Optional `NTFY_URL` auf einen eigenen, selbstgehosteten ntfy-Server
+   umstellen (Default: `https://ntfy.sh`).
+4. Für ein auf ntfy.sh **reserviertes/geschütztes** Topic (mit ntfy.sh-Account
+   unter *Settings → Reservations* anlegbar) zusätzlich unter *Settings →
+   Access Tokens* einen Token erzeugen und als `NTFY_TOKEN` eintragen. Für ein
+   öffentliches Topic (kein Account nötig) `NTFY_TOKEN` leer lassen.
+
+Fehler beim Versand (z. B. ntfy nicht erreichbar) werden nur geloggt und
+bringen den eigentlichen Bestell-Ablauf nicht zum Absturz.
+
+Seit Home Assistant 2025.5 gibt es eine offizielle ntfy-Core-Integration –
+das gleiche Topic lässt sich also zusätzlich in Home-Assistant-Automationen/
+Dashboards weiterverarbeiten (z. B. Ansage, Verlauf), unabhängig vom Skript.
+
 ## Kinder & Regeln anpassen
 
 ```bash

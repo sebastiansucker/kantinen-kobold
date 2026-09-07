@@ -25,6 +25,8 @@ Aufruf: python order_lunch.py
 Benötigte Umgebungsvariablen (siehe .env.example):
   ANTHROPIC_API_KEY (optional – nur nötig, wenn mindestens ein Kind in der
   Konfiguration keine bevorzugte_kategorien gesetzt hat)
+  NTFY_TOPIC (optional – nur gesetzt, wenn Push-Benachrichtigungen über
+  ntfy.sh/einen selbstgehosteten ntfy-Server gewünscht sind, siehe NtfyConfig)
 Zugangsdaten pro Kind stehen in der Kinder-Konfiguration, siehe
 config.json.example (Feld KINDER_CONFIG, Default config.json).
 """
@@ -130,6 +132,59 @@ def erstelle_browser_context(p, cfg: PlaywrightConfig) -> tuple[Browser, Browser
     if cfg.trace:
         context.tracing.start(screenshots=True, snapshots=True, sources=True)
     return browser, context
+
+
+@dataclass
+class NtfyConfig:
+    """Konfiguration für Push-Benachrichtigungen über ntfy.sh (oder einen
+    selbstgehosteten ntfy-Server), siehe https://ntfy.sh.
+
+    Ohne gesetztes `topic` sind Benachrichtigungen komplett deaktiviert
+    (Default-Verhalten unverändert, siehe sende_ntfy_nachricht()).
+    """
+
+    url: str = "https://ntfy.sh"
+    topic: str = ""
+    token: str = ""
+
+    @classmethod
+    def from_env(cls) -> "NtfyConfig":
+        return cls(
+            url=os.environ.get("NTFY_URL", "https://ntfy.sh").rstrip("/"),
+            topic=os.environ.get("NTFY_TOPIC", "").strip(),
+            token=os.environ.get("NTFY_TOKEN", "").strip(),
+        )
+
+
+def sende_ntfy_nachricht(
+    cfg: NtfyConfig, titel: str, nachricht: str, tags: Optional[list[str]] = None
+) -> None:
+    """Schickt eine Push-Benachrichtigung per ntfy.sh-Publish-API (einfacher
+    HTTP-POST an <url>/<topic>, siehe https://docs.ntfy.sh/publish/).
+
+    Ohne gesetztes NTFY_TOPIC ein No-Op. Versand-Fehler (z. B. ntfy nicht
+    erreichbar) dürfen den eigentlichen Bestell-Ablauf nicht zum Absturz
+    bringen und werden daher nur geloggt.
+    """
+    if not cfg.topic:
+        return
+
+    headers = {"Title": titel.encode("utf-8")}
+    if tags:
+        headers["Tags"] = ",".join(tags)
+    if cfg.token:
+        headers["Authorization"] = f"Bearer {cfg.token}"
+
+    try:
+        resp = httpx.post(
+            f"{cfg.url}/{cfg.topic}",
+            content=nachricht.encode("utf-8"),
+            headers=headers,
+            timeout=10,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        log.warning("ntfy-Benachrichtigung konnte nicht gesendet werden: %s", e)
 
 
 @dataclass
@@ -417,8 +472,14 @@ def waehle_gericht(tag: str, optionen: list[str], kind: Kind, api_key: Optional[
     return waehle_gericht_per_ki(tag, optionen, kind, api_key)
 
 
-def bestelle_gericht(page: Page, tag: str, kind: Kind, gericht: str) -> None:
+def bestelle_gericht(page: Page, tag: str, kind: Kind, gericht: str) -> bool:
     """Wählt für einen Tag das per KI/Regeln bestimmte Gericht aus.
+
+    Gibt zurück, ob dabei tatsächlich eine neue Bestellung ausgelöst wurde
+    (False, falls bereits etwas bestellt war, die Frist abgelaufen ist oder
+    das Gericht nicht gefunden wurde) – wird für die ntfy-Erfolgsmeldung in
+    bestelle_fuer_kind() gebraucht, damit dort nur tatsächlich geänderte
+    Tage aufgelistet werden.
 
     `page` ist bereits im eigenen Account von `kind` eingeloggt (jedes Kind
     hat einen eigenen GFB-Catering-Account, kein Umschalten innerhalb einer
@@ -442,7 +503,7 @@ def bestelle_gericht(page: Page, tag: str, kind: Kind, gericht: str) -> None:
         if bestell_control.locator("mat-icon").inner_text().strip() == "check":
             kategorie = menu_el.locator(".speiseplan-menu-titel strong").first.inner_text().strip()
             log.info("Für %s am %s bereits eine Bestellung vorhanden (%s) – unverändert gelassen.", kind.name, tag, kategorie)
-            return
+            return False
 
     log.info("Bestelle für %s am %s: %s", kind.name, tag, gericht)
     for menu_el in menu_els:
@@ -455,12 +516,13 @@ def bestelle_gericht(page: Page, tag: str, kind: Kind, gericht: str) -> None:
         ist_gesperrt = "disabled" in (bestell_control.get_attribute("class") or "")
         if ist_gesperrt:
             log.warning("Bestellfrist für %s (%s) bereits abgelaufen – überspringe.", tag, gericht)
-            return
+            return False
 
         bestell_control.click()
-        return
+        return True
 
     log.warning("Gericht '%s' am %s nicht im Speiseplan gefunden.", gericht, tag)
+    return False
 
 
 def bestellung_abschliessen(page: Page) -> None:
@@ -511,27 +573,44 @@ def bestelle_fuer_kind(
     api_key: Optional[str],
     dry_run: bool,
     schulferien: Optional[list[tuple[date, date]]] = None,
+    ntfy_cfg: Optional[NtfyConfig] = None,
 ) -> None:
     """Führt den kompletten Ablauf (Login, Auswahl, Bestätigung) für ein Kind
-    in einer eigenen Browser-Session gegen dessen eigenen Account aus."""
+    in einer eigenen Browser-Session gegen dessen eigenen Account aus.
+
+    Ist ntfy_cfg gesetzt (siehe NtfyConfig), wird bei Erfolg eine Übersicht
+    der neu bestellten Tage per ntfy verschickt (nur für Tage, an denen
+    tatsächlich eine neue Bestellung ausgelöst wurde, siehe bestelle_gericht()).
+    Fehlschläge werden von main() gemeldet, da dort über alle Kinder hinweg
+    entschieden wird, ob zusätzlich eine Sammel-Nachricht sinnvoll ist.
+    """
     browser, context = erstelle_browser_context(p, pw_cfg)
     page = context.new_page()
     try:
         login(page, kind.benutzername, kind.passwort)
         menueplan = lese_menueplan(page, schulferien)
 
+        neue_bestellungen: list[tuple[str, str]] = []
         for tag, gerichte in menueplan.items():
             optionen = waehle_gericht_regelbasiert(gerichte, kind)
             gericht = waehle_gericht(tag, optionen, kind, api_key)
             if dry_run:
                 log.info("[DRY RUN] Würde bestellen: %s / %s -> %s", tag, kind.name, gericht)
-            else:
-                bestelle_gericht(page, tag, kind, gericht)
+                neue_bestellungen.append((tag, gericht))
+            elif bestelle_gericht(page, tag, kind, gericht):
+                neue_bestellungen.append((tag, gericht))
 
         if not dry_run:
             bestellung_abschliessen(page)
         else:
             log.info("DRY_RUN=true – für %s keine tatsächliche Bestellung ausgelöst.", kind.name)
+
+        if ntfy_cfg and neue_bestellungen:
+            uebersicht = "\n".join(f"{tag}: {gericht}" for tag, gericht in neue_bestellungen)
+            titel = f"Bestellt: {kind.name}"
+            if dry_run:
+                titel = f"[DRY RUN] {titel}"
+            sende_ntfy_nachricht(ntfy_cfg, titel, uebersicht, tags=["white_check_mark"])
 
     except PWTimeout as e:
         log.error("Timeout beim Warten auf ein Element für %s – vermutlich falscher Selektor: %s", kind.name, e)
@@ -561,6 +640,7 @@ def main() -> None:
     config_pfad = os.environ.get("KINDER_CONFIG", "config.json")
     kinder = lade_kinder(config_pfad)
     pw_cfg = PlaywrightConfig.from_env()
+    ntfy_cfg = NtfyConfig.from_env()
     os.makedirs(pw_cfg.data_dir, exist_ok=True)
 
     # Standardmäßig wird in den Schulferien nicht bestellt (alle Kinder gehen
@@ -580,12 +660,25 @@ def main() -> None:
     with sync_playwright() as p:
         for kind in kinder:
             try:
-                bestelle_fuer_kind(p, pw_cfg, kind, api_key, dry_run, schulferien)
-            except Exception:
+                bestelle_fuer_kind(p, pw_cfg, kind, api_key, dry_run, schulferien, ntfy_cfg)
+            except Exception as e:
                 log.exception("Ablauf für %s fehlgeschlagen.", kind.name)
                 fehlgeschlagen.append(kind.name)
+                sende_ntfy_nachricht(
+                    ntfy_cfg,
+                    f"Fehlgeschlagen: {kind.name}",
+                    f"Ablauf für {kind.name} fehlgeschlagen: {e}",
+                    tags=["x"],
+                )
 
     if fehlgeschlagen:
+        if len(kinder) > 1:
+            sende_ntfy_nachricht(
+                ntfy_cfg,
+                "Bestellung: Fehler im Gesamtlauf",
+                f"Fehlgeschlagen für {len(fehlgeschlagen)} von {len(kinder)} Kindern: {', '.join(fehlgeschlagen)}",
+                tags=["warning"],
+            )
         raise RuntimeError(f"Fehlgeschlagen für: {', '.join(fehlgeschlagen)}")
 
 
