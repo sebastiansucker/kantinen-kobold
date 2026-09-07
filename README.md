@@ -114,14 +114,41 @@ steuern, ohne den Code anzufassen:
 | `PLAYWRIGHT_LOCALE`                | `de-DE`       | Browser-Locale                                           |
 | `PLAYWRIGHT_TIMEZONE`              | `Europe/Berlin` | Browser-Zeitzone                                       |
 | `PLAYWRIGHT_VIEWPORT_WIDTH/HEIGHT` | `1280x900`    | Viewport-Größe                                           |
+| `PLAYWRIGHT_USER_AGENT`            | echter Desktop-Chrome-UA | Siehe "Bot-/Rate-Limit-Erkennung vermeiden" unten |
 | `PLAYWRIGHT_TRACE`                 | `false`       | `true` = Playwright-Trace nach `trace.zip` aufzeichnen (mit `playwright show-trace trace.zip` auswertbar) |
 | `DATA_DIR`                         | `/data`       | Zielverzeichnis für Screenshots/Trace/Logs bei Fehlern   |
+| `STARTUP_JITTER_MAX_SECONDS`       | `900`         | Siehe "Bot-/Rate-Limit-Erkennung vermeiden" unten        |
 
 **Tipp zum Debuggen:** `PLAYWRIGHT_HEADLESS=false` und `PLAYWRIGHT_TRACE=true`
 setzen, Skript lokal (außerhalb des Containers) laufen lassen und den Ablauf
 im sichtbaren Browser bzw. anschließend per Trace-Viewer nachvollziehen –
 z. B. falls die Seite ihr Layout ändert und Selektoren angepasst werden
 müssen.
+
+### Bot-/Rate-Limit-Erkennung vermeiden
+
+Bei einem Lauf pro Tag und Kind ist die reine Request-Frequenz gegenüber der
+Seite ohnehin sehr niedrig – das eigentliche Risiko ist eher, dass
+automatisierter Browser-Traffic als solcher erkannt (und z. B. von einer
+Bot-/WAF-Lösung geblockt) statt klassisch "rate-gelimited" wird. Deshalb
+setzt `erstelle_browser_context()` ein paar Standardmaßnahmen um, live
+verifiziert (Login funktioniert weiterhin, `navigator.userAgent` zeigt einen
+normalen Desktop-Chrome ohne "Headless", `navigator.webdriver` ist
+`undefined`):
+
+- Fester, realistischer Desktop-Chrome-`User-Agent`
+  (`PLAYWRIGHT_USER_AGENT`) statt des von Chromium selbst gemeldeten.
+- `navigator.webdriver` wird per Init-Script auf `undefined` gesetzt – das
+  von WebDriver/CDP-gesteuerten Browsern gesetzte Flag ist einer der ersten
+  Checks vieler Bot-Erkennungen.
+- Zufällige Startverzögerung (`STARTUP_JITTER_MAX_SECONDS`, Default 15 min)
+  am Anfang von `main()`, damit der tägliche Cronjob nicht jeden Tag exakt
+  zur selben Sekunde bei der Seite aufschlägt.
+
+Das ersetzt keine vollständige Browser-Fingerprint-Verschleierung (z. B.
+Canvas-/WebGL-Fingerprinting bleibt unangetastet) – für den hier vorliegenden
+Zweck (ein bis zwei legitime, mit echten Zugangsdaten eingeloggte Nutzer pro
+Tag) ist das aber ausreichend und verhältnismäßig.
 
 ## Testen ohne echte Bestellung
 

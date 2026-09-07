@@ -32,7 +32,9 @@ config.json.example (Feld KINDER_CONFIG, Default config.json).
 import os
 import json
 import logging
+import random
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Optional
@@ -52,13 +54,23 @@ def _env_bool(name: str, default: bool) -> bool:
     return os.environ.get(name, str(default)).strip().lower() in ("1", "true", "yes")
 
 
+# Realistischer Desktop-Chrome-UA statt des von Playwright/Chromium selbst
+# gemeldeten (kann je nach Chromium-Version verräterische Automations-Marker
+# enthalten). Versionsnummer grob an die im Docker-Image gebündelte
+# Chromium-Version angelehnt, muss nicht exakt stimmen.
+STANDARD_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
+)
+
+
 @dataclass
 class PlaywrightConfig:
     """Browser-/Kontext-Einstellungen für Playwright, per Umgebungsvariable steuerbar.
 
-    Solange die TODO-Selektoren in diesem Skript noch nicht gegen die echte
-    Seite geprüft sind, hilft vor allem PLAYWRIGHT_HEADLESS=false (Browser
-    sichtbar) und PLAYWRIGHT_TRACE=true (playwright show-trace zum Debuggen).
+    PLAYWRIGHT_HEADLESS=false (Browser sichtbar) und PLAYWRIGHT_TRACE=true
+    (playwright show-trace) helfen beim Debuggen, falls die Seite ihr Layout
+    ändert und Selektoren angepasst werden müssen.
     """
 
     headless: bool = True
@@ -69,6 +81,7 @@ class PlaywrightConfig:
     timezone_id: str = "Europe/Berlin"
     viewport_width: int = 1280
     viewport_height: int = 900
+    user_agent: str = STANDARD_USER_AGENT
     trace: bool = False
     data_dir: str = "/data"
 
@@ -83,18 +96,34 @@ class PlaywrightConfig:
             timezone_id=os.environ.get("PLAYWRIGHT_TIMEZONE", "Europe/Berlin"),
             viewport_width=int(os.environ.get("PLAYWRIGHT_VIEWPORT_WIDTH", "1280")),
             viewport_height=int(os.environ.get("PLAYWRIGHT_VIEWPORT_HEIGHT", "900")),
+            user_agent=os.environ.get("PLAYWRIGHT_USER_AGENT", STANDARD_USER_AGENT),
             trace=_env_bool("PLAYWRIGHT_TRACE", False),
             data_dir=os.environ.get("DATA_DIR", "/data"),
         )
 
 
 def erstelle_browser_context(p, cfg: PlaywrightConfig) -> tuple[Browser, BrowserContext]:
-    """Startet Chromium und einen Kontext gemäß PlaywrightConfig."""
+    """Startet Chromium und einen Kontext gemäß PlaywrightConfig.
+
+    Ein paar Standardmaßnahmen, damit die Sitzung wie ein normaler
+    Browser-Nutzer aussieht statt wie offensichtliche Automatisierung
+    (relevant für Bot-/Rate-Limit-Erkennung, nicht für reine Requestfrequenz –
+    bei einem Lauf pro Tag und Kind ist die ohnehin sehr niedrig):
+      - Fester, realistischer Desktop-Chrome-User-Agent (siehe
+        STANDARD_USER_AGENT) statt des von Chromium selbst gemeldeten.
+      - `navigator.webdriver` wird per Init-Script auf `undefined` gesetzt –
+        das von WebDriver/CDP-gesteuerten Browsern gesetzte Flag ist einer
+        der ersten Checks vieler Bot-Erkennungen.
+    """
     browser = p.chromium.launch(headless=cfg.headless, slow_mo=cfg.slow_mo_ms)
     context = browser.new_context(
         locale=cfg.locale,
         timezone_id=cfg.timezone_id,
         viewport={"width": cfg.viewport_width, "height": cfg.viewport_height},
+        user_agent=cfg.user_agent,
+    )
+    context.add_init_script(
+        "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
     )
     context.set_default_timeout(cfg.action_timeout_ms)
     context.set_default_navigation_timeout(cfg.navigation_timeout_ms)
@@ -515,6 +544,15 @@ def bestelle_fuer_kind(
 
 
 def main() -> None:
+    # Zufällige Startverzögerung, damit der tägliche Cronjob nicht jeden Tag
+    # exakt zur selben Sekunde bei der Seite aufschlägt (ein klares
+    # Automatisierungsmerkmal). 0 = deaktiviert.
+    jitter_max_s = int(os.environ.get("STARTUP_JITTER_MAX_SECONDS", "900"))
+    if jitter_max_s > 0:
+        verzoegerung = random.uniform(0, jitter_max_s)
+        log.info("Warte %.0f s (zufällige Startverzögerung) …", verzoegerung)
+        time.sleep(verzoegerung)
+
     # Nur nötig als Fallback für Kinder ohne bevorzugte_kategorien (siehe
     # Kind/waehle_gericht) – wer für alle Kinder eine Kategorie-Präferenz
     # setzt, braucht keinen ANTHROPIC_API_KEY.
