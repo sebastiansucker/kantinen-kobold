@@ -147,6 +147,9 @@ activemq-data/
 # SageMath parsed files
 *.sage.py
 
+# Projektspezifisch: enthält echte Zugangsdaten (siehe config.json.example)
+config.json
+
 # Environments
 .env
 .envrc
