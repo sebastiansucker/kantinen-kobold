@@ -13,12 +13,11 @@ und KI-gestützter Auswahl (Claude API) unter den verbleibenden Optionen.
 > dem Einsatz die Nutzungsbedingungen des jeweiligen Bestellportals prüfen –
 > manche Anbieter untersagen automatisierte Zugriffe explizit.
 
-## Status: Alle Selektoren gegen die echte Seite bestätigt
+## Status: Kompletter Ablauf end-to-end bestätigt
 
-Login, Speiseplan-Auslesen und Gerichtsauswahl wurden per Playwright live
-gegen die echte Seite geprüft (mit den in der Umgebung hinterlegten echten
-Zugangsdaten, ohne tatsächlich eine Bestellung auszulösen) und die
-Selektoren in `order_lunch.py` entsprechend aktualisiert:
+Login, Speiseplan-Auslesen, Gerichtsauswahl und Bestellbestätigung wurden
+per Playwright live gegen die echte Seite geprüft und die Selektoren in
+`order_lunch.py` entsprechend aktualisiert:
 
 - Benutzername: `input#benutzername` (Angular `formcontrolname="login"`)
 - Passwort: `input#passwort` (Angular `formcontrolname="password"`)
@@ -32,17 +31,17 @@ Selektoren in `order_lunch.py` entsprechend aktualisiert:
   `check` = bereits bestellt, Klasse `disabled` = Frist abgelaufen).
 - Der Warenkorb (`#/warenkorb`) zeigt ausstehende Änderungen und einen
   Button "Zum genannten Preis bestätigen" zum endgültigen Abschicken.
+  **Wichtig:** Der Warenkorb wird nur clientseitig in der laufenden
+  Browser-Sitzung gehalten – Login, Auswahl und Bestätigung müssen in
+  einer durchgehenden Playwright-Session laufen (wie in `main()`).
+- Mit einer echten Testbestellung (ein Gericht, ein Tag) end-to-end
+  verifiziert; Erfolgstext nach dem Bestätigen: "Vielen Dank. Die
+  Bestellung für den angegebenen Zeitraum wurde erfolgreich im System
+  hinterlegt."
 
-**Noch nicht verifiziert, da dafür eine echte Bestellung nötig wäre:**
-- Das Verhalten/die Erfolgsmeldung *nach* dem Klick auf "Zum genannten
-  Preis bestätigen" in `bestellung_abschliessen()`.
-- Der Ablauf zum Umschalten zwischen mehreren Kindern im selben Account
-  (der getestete Account hatte nur ein Kind hinterlegt).
-
-**Empfehlung vor dem produktiven Einsatz:** Ersten echten Lauf mit
-`DRY_RUN=false` gezielt für ein einzelnes, unkritisches Gericht/Kind
-durchführen und das Ergebnis in der App (Bestellungen/Warenkorb) prüfen,
-bevor der wöchentliche Cronjob aktiviert wird.
+**Noch nicht verifiziert:** Der Ablauf zum Umschalten zwischen mehreren
+Kindern im selben Account (der getestete Account hatte nur ein Kind
+hinterlegt) – siehe TODO in `bestelle_gericht()`.
 
 ## Setup
 

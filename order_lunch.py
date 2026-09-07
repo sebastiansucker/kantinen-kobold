@@ -9,13 +9,12 @@ Ablauf:
      das passende Gericht aus den verbleibenden Optionen wählen lassen
   4. Auswahl für jeden Tag/jedes Kind eintragen und Bestellung abschicken
 
-WICHTIG: Login, Speiseplan-Auslesen und Gerichtsauswahl (login(),
-lese_menueplan(), bestelle_gericht()) wurden per Playwright live gegen die
-echte Seite geprüft und bestätigt, OHNE eine echte Bestellung auszulösen.
-Nicht verifiziert ist das Verhalten nach dem finalen Bestätigungsklick in
-bestellung_abschliessen() sowie der Ablauf bei mehreren Kindern im selben
-Account (siehe TODOs dort) – das sollte vor dem produktiven Einsatz mit
-einem einzelnen, unkritischen echten Lauf geprüft werden.
+WICHTIG: Der komplette Ablauf (login(), lese_menueplan(), bestelle_gericht(),
+bestellung_abschliessen()) wurde per Playwright live gegen die echte Seite
+geprüft und mit einer echten Testbestellung (ein Gericht, ein Tag) end-to-end
+bestätigt. Nicht verifiziert ist der Ablauf bei mehreren Kindern im selben
+Account (siehe TODO in bestelle_gericht()), da der getestete Account nur ein
+Kind enthält.
 
 Aufruf: python order_lunch.py
 Benötigte Umgebungsvariablen (siehe .env.example):
@@ -279,20 +278,30 @@ def bestelle_gericht(page: Page, tag: str, kind: Kind, gericht: str) -> None:
 def bestellung_abschliessen(page: Page) -> None:
     """Bestätigt die im Warenkorb gesammelten Bestelländerungen – irreversibler Schritt!
 
-    Per Live-Inspektion bestätigt (Warenkorb ohne ausstehende Änderungen
-    getestet, NICHT tatsächlich bestätigt): Der Warenkorb (#/warenkorb) zeigt
-    eine Tabelle der Änderungen, den Gesamtpreis und einen Button
-    "Zum genannten Preis bestätigen" (ist per <button disabled> deaktiviert,
-    solange keine Änderungen vorliegen). Das Verhalten NACH dem Klick
-    (Erfolgsmeldung o. ä.) konnte nicht geprüft werden, ohne tatsächlich eine
-    Bestellung auszulösen – "Bestellung erfolgreich" ist daher weiterhin eine
-    Annahme und muss beim ersten echten Lauf (am besten mit DRY_RUN=false nur
-    für ein einzelnes, unkritisches Gericht) verifiziert werden.
+    Per Live-Inspektion mit einer echten Testbestellung vollständig bestätigt.
+    Wichtig: Der Warenkorb wird nur clientseitig in der laufenden Browser-
+    Sitzung gehalten – Login, Gerichtsauswahl und Bestätigung müssen daher
+    in EINER durchgehenden Playwright-Session laufen (wie in main() der
+    Fall), sonst ist der Warenkorb beim Aufruf von bestellung_abschliessen()
+    wieder leer.
+
+    Ablauf: Warenkorb (#/warenkorb) öffnen, optionalen Hinweisdialog
+    ("Bestätigung der Bestelländerung erforderlich" mit "OK"-Button –
+    erscheint nicht bei jedem Aufruf) schließen, dann auf
+    "Zum genannten Preis bestätigen" klicken. Bestätigter Erfolgstext:
+    "Vielen Dank. Die Bestellung für den angegebenen Zeitraum wurde
+    erfolgreich im System hinterlegt."
     """
     page.get_by_text("Warenkorb", exact=False).first.click()
     page.wait_for_load_state("networkidle")
+
+    try:
+        page.get_by_role("button", name="OK").click(timeout=3000)
+    except PWTimeout:
+        pass  # Hinweisdialog erscheint nicht immer
+
     page.get_by_role("button", name="Zum genannten Preis bestätigen").click()
-    page.wait_for_selector("text=Bestellung erfolgreich", timeout=15000)  # TODO prüfen
+    page.wait_for_selector("text=Vielen Dank", timeout=15000)
     log.info("Bestellung abgeschlossen.")
 
 
