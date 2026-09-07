@@ -4,15 +4,17 @@ GFB Catering – automatische wöchentliche Mittagessen-Bestellung
 
 Ablauf:
   1. Login auf https://bestellung-gfb-catering.de/
-  2. Menüplan der kommenden Woche auslesen (pro Wochentag verfügbare Gerichte)
+  2. Speiseplan der kommenden Woche auslesen (pro Wochentag verfügbare Gerichte)
   3. Pro Kind: harte Regeln anwenden (Ausschlüsse), danach per Claude-API
      das passende Gericht aus den verbleibenden Optionen wählen lassen
   4. Auswahl für jeden Tag/jedes Kind eintragen und Bestellung abschicken
 
-WICHTIG: Alle mit "TODO" markierten Selektoren/URLs sind Platzhalter.
+WICHTIG: Die Login-Selektoren (login()) wurden per Playwright live gegen
+die echte Seite geprüft und bestätigt. Alle übrigen mit "TODO" markierten
+Selektoren (nach dem Login) sind weiterhin Platzhalter, da dieser Bereich
+echte Zugangsdaten erfordert und noch nicht live eingesehen werden konnte.
 Sie müssen anhand der echten Seite (z. B. über die Chrome-Entwicklertools,
-Rechtsklick -> Untersuchen) geprüft und angepasst werden, da ich die Seite
-noch nicht live einsehen konnte.
+Rechtsklick -> Untersuchen) geprüft und angepasst werden.
 
 Aufruf: python order_lunch.py
 Benötigte Umgebungsvariablen (siehe .env.example):
@@ -118,14 +120,23 @@ def login(page: Page, username: str, password: str) -> None:
     log.info("Öffne Startseite …")
     page.goto(BASE_URL, wait_until="networkidle")
 
-    # TODO: Selektoren für Login-Formular prüfen. Übliche Kandidaten:
-    # page.get_by_label("Benutzername") / page.get_by_placeholder("E-Mail")
-    page.get_by_label("Benutzername").fill(username)  # TODO prüfen
-    page.get_by_label("Passwort").fill(password)  # TODO prüfen
-    page.get_by_role("button", name="Anmelden").click()  # TODO prüfen
+    # Login ist eine eigene Route (#/login), kein Formular auf der Startseite.
+    # Per Live-Inspektion bestätigt (Chromium/Playwright gegen die echte Seite):
+    #   Benutzername: <input id="benutzername" formcontrolname="login">
+    #   Passwort:     <input id="passwort" formcontrolname="password">
+    #   Button:       <button>Anmelden</button>
+    page.get_by_text("Anmelden", exact=False).first.click()
+    page.wait_for_url("**/#/login")
 
-    # Warten bis Login abgeschlossen ist (z. B. Dashboard-Element sichtbar)
-    page.wait_for_selector("text=Menüplan", timeout=15000)  # TODO prüfen
+    page.locator("#benutzername").fill(username)
+    page.locator("#passwort").fill(password)
+    page.get_by_role("button", name="Anmelden").click()
+
+    # TODO prüfen: Ohne echte Zugangsdaten konnte der Zustand nach dem Login
+    # nicht live eingesehen werden. Die App nennt den Speiseplan durchgehend
+    # "Speiseplan" (nicht "Menüplan" wie ursprünglich vermutet) – das
+    # folgende Warten muss anhand des echten Post-Login-Screens geprüft werden.
+    page.wait_for_selector("text=Speiseplan", timeout=15000)  # TODO prüfen
     log.info("Login erfolgreich.")
 
 
@@ -140,8 +151,10 @@ def lese_menueplan(page: Page) -> dict:
         ...
     }
     """
-    # TODO: Navigation zum Menüplan
-    page.get_by_role("link", name="Menüplan").click()  # TODO prüfen
+    # TODO prüfen: Der Navigationstext heißt in der App "Speiseplan" (bestätigt
+    # per Live-Inspektion), das genaue Element (Link/Tab/Button, evtl. hinter
+    # einem Menü-Icon) muss aber am echten Post-Login-Screen geprüft werden.
+    page.get_by_text("Speiseplan", exact=False).first.click()  # TODO prüfen
     page.wait_for_load_state("networkidle")
 
     # TODO: Diese Extraktion ist ein Platzhalter. Je nach DOM-Struktur

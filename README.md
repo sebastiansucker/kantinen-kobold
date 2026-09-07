@@ -13,20 +13,31 @@ und KI-gestützter Auswahl (Claude API) unter den verbleibenden Optionen.
 > dem Einsatz die Nutzungsbedingungen des jeweiligen Bestellportals prüfen –
 > manche Anbieter untersagen automatisierte Zugriffe explizit.
 
-## Status: Gerüst – noch nicht einsatzbereit
+## Status: Login-Selektoren bestätigt, Rest noch Platzhalter
 
-Ich konnte die Zielseite noch nicht live einsehen (kein verbundener Browser).
-Alle mit `# TODO` markierten Stellen in `order_lunch.py` sind Platzhalter für
-CSS-Selektoren / Texte, die zur echten Seite passen müssen. So findest du sie:
+Die Login-Seite (`#/login`) wurde per Playwright live gegen die echte Seite
+geprüft (ohne echte Zugangsdaten einzugeben) und die Selektoren in
+`login()` entsprechend aktualisiert:
+
+- Benutzername: `input#benutzername` (Angular `formcontrolname="login"`)
+- Passwort: `input#passwort` (Angular `formcontrolname="password"`)
+- Login-Button: `<button>Anmelden</button>`
+- Der Speiseplan-Bereich der App heißt durchgängig **"Speiseplan"**, nicht
+  "Menüplan" wie ursprünglich vermutet.
+
+Alle mit `# TODO` markierten Stellen **nach dem Login** (Speiseplan-Navigation,
+Tage-/Gerichte-Extraktion, Bestellauswahl, Bestätigungs-Button) sind weiterhin
+Platzhalter, da diese Bereiche echte Zugangsdaten erfordern und noch nicht
+live eingesehen werden konnten. So findest du sie:
 
 1. Seite im Chrome öffnen, einloggen.
-2. Rechtsklick auf das jeweilige Element (Login-Feld, Menüplan-Tag, Gericht,
+2. Rechtsklick auf das jeweilige Element (Speiseplan-Tag, Gericht,
    Bestätigungs-Button) → **Untersuchen**.
 3. Den passenden Selektor (id, class, text) in `order_lunch.py` eintragen.
 
 **Alternative:** Wenn du die Claude-in-Chrome-Erweiterung installierst und
 verbindest, kann ich die Seite (ohne deine Zugangsdaten selbst einzugeben)
-inspizieren und die Selektoren direkt für dich ausfüllen.
+inspizieren und die restlichen Selektoren direkt für dich ausfüllen.
 
 ## Setup
 
