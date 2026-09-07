@@ -25,8 +25,11 @@ Aufruf: python order_lunch.py
 Benötigte Umgebungsvariablen (siehe .env.example):
   ANTHROPIC_API_KEY (optional – nur nötig, wenn mindestens ein Kind in der
   Konfiguration keine bevorzugte_kategorien gesetzt hat)
-Zugangsdaten pro Kind stehen in der Kinder-Konfiguration, siehe
-config.json.example (Feld KINDER_CONFIG, Default config.json).
+Zugangsdaten pro Kind stehen entweder in der Kinder-Konfiguration (siehe
+config.json.example, Feld KINDER_CONFIG, Default config.json) oder – falls
+GFB_USERNAME_KIND1 gesetzt ist – in Umgebungsvariablen
+GFB_USERNAME_KIND<n>/GFB_PASSWORD_KIND<n>/KIND<n>_VERMEIDEN/... (siehe
+lade_kinder_aus_env()).
 """
 
 import os
@@ -173,6 +176,60 @@ def lade_kinder(config_pfad: str) -> list[Kind]:
         )
         for eintrag in rohdaten
     ]
+
+
+STANDARD_BEVORZUGTE_KATEGORIEN = ["DGE", "Classic", "BIO-Veggie"]
+
+
+def _liste_aus_kommagetrennt(wert: str) -> list[str]:
+    return [teil.strip() for teil in wert.split(",") if teil.strip()]
+
+
+def lade_kinder_aus_env() -> list[Kind]:
+    """Lädt die Kinder-Konfiguration alternativ aus Umgebungsvariablen statt
+    aus config.json – praktisch, wenn die Zugangsdaten (z. B. in einer
+    gehosteten Session) bereits als Secrets/Env-Vars vorliegen statt als
+    Datei.
+
+    Pro Kind (durchnummeriert ab 1, z. B. für Kind 1 und Kind 2):
+      GFB_USERNAME_KIND<n> / GFB_PASSWORD_KIND<n> (Pflicht)
+      KIND<n>_VERMEIDEN       kommagetrennte Ausschlüsse, z. B. "Fisch,Fleisch"
+      KIND<n>_NAME            Anzeigename, Default "Kind <n>"
+      KIND<n>_KATEGORIEN      kommagetrennte Kategorie-Präferenz, Default
+                              STANDARD_BEVORZUGTE_KATEGORIEN
+      KIND<n>_VORLIEBEN       freie Vorlieben für die KI-Auswahl (nur
+                              relevant, falls KIND<n>_KATEGORIEN leer gesetzt wird)
+
+    Wird verwendet, sobald mindestens GFB_USERNAME_KIND1 gesetzt ist (siehe
+    main()); die Nummerierung muss lückenlos ab 1 beginnen.
+    """
+    kinder = []
+    n = 1
+    while f"GFB_USERNAME_KIND{n}" in os.environ:
+        benutzername = os.environ[f"GFB_USERNAME_KIND{n}"]
+        try:
+            passwort = os.environ[f"GFB_PASSWORD_KIND{n}"]
+        except KeyError:
+            raise RuntimeError(
+                f"GFB_USERNAME_KIND{n} ist gesetzt, aber GFB_PASSWORD_KIND{n} fehlt."
+            ) from None
+        kategorien_roh = os.environ.get(f"KIND{n}_KATEGORIEN")
+        kinder.append(
+            Kind(
+                name=os.environ.get(f"KIND{n}_NAME", f"Kind {n}"),
+                benutzername=benutzername,
+                passwort=passwort,
+                ausschluesse=_liste_aus_kommagetrennt(os.environ.get(f"KIND{n}_VERMEIDEN", "")),
+                bevorzugte_kategorien=(
+                    _liste_aus_kommagetrennt(kategorien_roh)
+                    if kategorien_roh is not None
+                    else list(STANDARD_BEVORZUGTE_KATEGORIEN)
+                ),
+                vorlieben=os.environ.get(f"KIND{n}_VORLIEBEN", ""),
+            )
+        )
+        n += 1
+    return kinder
 
 
 def lade_schulferien(config_pfad: str, bundesland: str) -> list[tuple[date, date]]:
@@ -558,8 +615,11 @@ def main() -> None:
     # setzt, braucht keinen ANTHROPIC_API_KEY.
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     dry_run = os.environ.get("DRY_RUN", "true").lower() == "true"
-    config_pfad = os.environ.get("KINDER_CONFIG", "config.json")
-    kinder = lade_kinder(config_pfad)
+    if "GFB_USERNAME_KIND1" in os.environ:
+        kinder = lade_kinder_aus_env()
+    else:
+        config_pfad = os.environ.get("KINDER_CONFIG", "config.json")
+        kinder = lade_kinder(config_pfad)
     pw_cfg = PlaywrightConfig.from_env()
     os.makedirs(pw_cfg.data_dir, exist_ok=True)
 
