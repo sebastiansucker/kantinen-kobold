@@ -1,3 +1,9 @@
 # Minute Stunde Tag Monat Wochentag Befehl
-# Läuft jeden Montag um 06:00 Uhr, Umgebungsvariablen werden aus /app/.env geladen
-0 6 * * 1 . /app/.env && cd /app && python order_lunch.py >> /data/order_lunch.log 2>&1
+# Läuft täglich um 06:00 Uhr, Umgebungsvariablen werden aus /app/.env geladen.
+# Bewusst täglich statt nur einmal pro Woche: Bestellfristen für die
+# Folgewoche können schon Mittwoch/Donnerstag der Vorwoche ablaufen, ein
+# einzelner Wochenlauf könnte das verpassen. Wiederholte Läufe sind sicher
+# (idempotent) - bereits bestellte Tage werden nicht angetastet, ein leerer
+# Warenkorb führt zu keiner Aktion (siehe bestelle_gericht()/
+# bestellung_abschliessen() in order_lunch.py).
+0 6 * * * . /app/.env && cd /app && python order_lunch.py >> /data/order_lunch.log 2>&1
