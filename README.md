@@ -13,31 +13,36 @@ und KI-gestützter Auswahl (Claude API) unter den verbleibenden Optionen.
 > dem Einsatz die Nutzungsbedingungen des jeweiligen Bestellportals prüfen –
 > manche Anbieter untersagen automatisierte Zugriffe explizit.
 
-## Status: Login-Selektoren bestätigt, Rest noch Platzhalter
+## Status: Alle Selektoren gegen die echte Seite bestätigt
 
-Die Login-Seite (`#/login`) wurde per Playwright live gegen die echte Seite
-geprüft (ohne echte Zugangsdaten einzugeben) und die Selektoren in
-`login()` entsprechend aktualisiert:
+Login, Speiseplan-Auslesen und Gerichtsauswahl wurden per Playwright live
+gegen die echte Seite geprüft (mit den in der Umgebung hinterlegten echten
+Zugangsdaten, ohne tatsächlich eine Bestellung auszulösen) und die
+Selektoren in `order_lunch.py` entsprechend aktualisiert:
 
 - Benutzername: `input#benutzername` (Angular `formcontrolname="login"`)
 - Passwort: `input#passwort` (Angular `formcontrolname="password"`)
 - Login-Button: `<button>Anmelden</button>`
-- Der Speiseplan-Bereich der App heißt durchgängig **"Speiseplan"**, nicht
+- Der Bestellbereich der App heißt durchgängig **"Speiseplan"**, nicht
   "Menüplan" wie ursprünglich vermutet.
+- Ein Tag im Speiseplan ist `div.speiseplan-tagWbp`, darin mehrere
+  `.speiseplanMenu`-Karten (Kategorie z. B. "DGE"/"Classic"/"BIO-Veggie" +
+  Beschreibung) mit je einem Bestell-Icon-Button
+  `[data-testid="order-einzeln"]` (Zustände: `add` = bestellbar,
+  `check` = bereits bestellt, Klasse `disabled` = Frist abgelaufen).
+- Der Warenkorb (`#/warenkorb`) zeigt ausstehende Änderungen und einen
+  Button "Zum genannten Preis bestätigen" zum endgültigen Abschicken.
 
-Alle mit `# TODO` markierten Stellen **nach dem Login** (Speiseplan-Navigation,
-Tage-/Gerichte-Extraktion, Bestellauswahl, Bestätigungs-Button) sind weiterhin
-Platzhalter, da diese Bereiche echte Zugangsdaten erfordern und noch nicht
-live eingesehen werden konnten. So findest du sie:
+**Noch nicht verifiziert, da dafür eine echte Bestellung nötig wäre:**
+- Das Verhalten/die Erfolgsmeldung *nach* dem Klick auf "Zum genannten
+  Preis bestätigen" in `bestellung_abschliessen()`.
+- Der Ablauf zum Umschalten zwischen mehreren Kindern im selben Account
+  (der getestete Account hatte nur ein Kind hinterlegt).
 
-1. Seite im Chrome öffnen, einloggen.
-2. Rechtsklick auf das jeweilige Element (Speiseplan-Tag, Gericht,
-   Bestätigungs-Button) → **Untersuchen**.
-3. Den passenden Selektor (id, class, text) in `order_lunch.py` eintragen.
-
-**Alternative:** Wenn du die Claude-in-Chrome-Erweiterung installierst und
-verbindest, kann ich die Seite (ohne deine Zugangsdaten selbst einzugeben)
-inspizieren und die restlichen Selektoren direkt für dich ausfüllen.
+**Empfehlung vor dem produktiven Einsatz:** Ersten echten Lauf mit
+`DRY_RUN=false` gezielt für ein einzelnes, unkritisches Gericht/Kind
+durchführen und das Ergebnis in der App (Bestellungen/Warenkorb) prüfen,
+bevor der wöchentliche Cronjob aktiviert wird.
 
 ## Setup
 

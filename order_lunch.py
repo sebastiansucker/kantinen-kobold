@@ -9,12 +9,13 @@ Ablauf:
      das passende Gericht aus den verbleibenden Optionen wählen lassen
   4. Auswahl für jeden Tag/jedes Kind eintragen und Bestellung abschicken
 
-WICHTIG: Die Login-Selektoren (login()) wurden per Playwright live gegen
-die echte Seite geprüft und bestätigt. Alle übrigen mit "TODO" markierten
-Selektoren (nach dem Login) sind weiterhin Platzhalter, da dieser Bereich
-echte Zugangsdaten erfordert und noch nicht live eingesehen werden konnte.
-Sie müssen anhand der echten Seite (z. B. über die Chrome-Entwicklertools,
-Rechtsklick -> Untersuchen) geprüft und angepasst werden.
+WICHTIG: Login, Speiseplan-Auslesen und Gerichtsauswahl (login(),
+lese_menueplan(), bestelle_gericht()) wurden per Playwright live gegen die
+echte Seite geprüft und bestätigt, OHNE eine echte Bestellung auszulösen.
+Nicht verifiziert ist das Verhalten nach dem finalen Bestätigungsklick in
+bestellung_abschliessen() sowie der Ablauf bei mehreren Kindern im selben
+Account (siehe TODOs dort) – das sollte vor dem produktiven Einsatz mit
+einem einzelnen, unkritischen echten Lauf geprüft werden.
 
 Aufruf: python order_lunch.py
 Benötigte Umgebungsvariablen (siehe .env.example):
@@ -142,32 +143,53 @@ def login(page: Page, username: str, password: str) -> None:
 
 def lese_menueplan(page: Page) -> dict:
     """
-    Liest den Menüplan der aktuellen/kommenden Woche aus.
+    Liest den Speiseplan aus und gibt nur noch änderbare Tage zurück (Tage,
+    deren Bestellfrist bereits abgelaufen ist, werden übersprungen).
 
-    Erwartetes Rückgabeformat:
+    Per Live-Inspektion bestätigte DOM-Struktur (Angular/Material-App):
+      div.speiseplan-tagWbp                          – ein Tag
+        speiseplantaglabel .speiseplanTagLabelNormal strong  – z. B. "07.09.26 - Montag"
+        .speiseplanMenu (mehrere pro Tag, i. d. R. DGE/Classic/BIO-Veggie)
+          .speiseplan-menu-titel strong (1.)          – Kategoriename, z. B. "DGE"
+          #speiseplanMenuBeschreibung                 – Gerichtbeschreibung
+          [data-testid="order-einzeln"]               – Bestell-Icon-Button
+            Klasse "disabled"                         – Frist abgelaufen, nicht mehr änderbar
+            mat-icon-Text "check"                     – aktuell für diesen Tag bestellt
+            mat-icon-Text "add"                       – nicht bestellt, klickbar zum Bestellen
+            mat-icon-Text "remove_shopping_cart"       – für vergangene/gesperrte Tage (informativ)
+
+    Rückgabeformat (Schlüssel ist das volle Datum+Wochentag-Label, da ein
+    Monat mehrere gleichnamige Wochentage enthält):
     {
-        "Montag": ["Gericht A (vegetarisch)", "Gericht B (Fisch)", ...],
-        "Dienstag": [...],
+        "07.09.26 - Montag": ["DGE: ...", "Classic: ...", "BIO-Veggie: ..."],
         ...
     }
     """
-    # TODO prüfen: Der Navigationstext heißt in der App "Speiseplan" (bestätigt
-    # per Live-Inspektion), das genaue Element (Link/Tab/Button, evtl. hinter
-    # einem Menü-Icon) muss aber am echten Post-Login-Screen geprüft werden.
-    page.get_by_text("Speiseplan", exact=False).first.click()  # TODO prüfen
+    page.get_by_text("Speiseplan", exact=False).first.click()
     page.wait_for_load_state("networkidle")
 
-    # TODO: Diese Extraktion ist ein Platzhalter. Je nach DOM-Struktur
-    # müssen hier die echten Selektoren für Tage/Gerichte rein, z. B.:
-    # tage = page.locator(".menu-day").all()
     menueplan: dict[str, list[str]] = {}
-    tage = page.locator(".menu-day").all()  # TODO prüfen
+    tage = page.locator(".speiseplan-tagWbp").all()
     for tag_el in tage:
-        tag_name = tag_el.locator(".day-label").inner_text().strip()  # TODO prüfen
-        gerichte = [g.inner_text().strip() for g in tag_el.locator(".dish-name").all()]  # TODO prüfen
+        tag_name = tag_el.locator(".speiseplanTagLabelNormal strong").inner_text().strip()
+
+        menu_els = tag_el.locator(".speiseplanMenu").all()
+        aenderbar = any(
+            "disabled" not in (m.locator("[data-testid='order-einzeln']").get_attribute("class") or "")
+            for m in menu_els
+        )
+        if not aenderbar:
+            log.info("Überspringe %s – Bestellfrist bereits abgelaufen.", tag_name)
+            continue
+
+        gerichte = []
+        for menu_el in menu_els:
+            kategorie = menu_el.locator(".speiseplan-menu-titel strong").first.inner_text().strip()
+            beschreibung = menu_el.locator("#speiseplanMenuBeschreibung").inner_text().strip()
+            gerichte.append(f"{kategorie}: {beschreibung}")
         menueplan[tag_name] = gerichte
 
-    log.info("Menüplan gelesen: %s", menueplan)
+    log.info("Speiseplan gelesen (nur änderbare Tage): %s", menueplan)
     return menueplan
 
 
@@ -218,19 +240,58 @@ Antworte NUR mit dem exakten Gerichtnamen aus der Liste, ohne weitere Erklärung
 
 
 def bestelle_gericht(page: Page, tag: str, kind: Kind, gericht: str) -> None:
-    """Trägt die Auswahl für einen Tag/ein Kind ein. Muss an echte UI angepasst werden."""
-    # TODO: Navigation/Auswahl-Logik für die konkrete Bestell-UI.
-    # Beispielhafter Ablauf (anzupassen):
-    # page.get_by_text(kind.name).click()
-    # page.locator(f".menu-day:has-text('{tag}')").get_by_text(gericht).click()
+    """Wählt für einen Tag/ein Kind das per KI/Regeln bestimmte Gericht aus.
+
+    `tag` ist das volle Label aus lese_menueplan() (z. B. "07.09.26 - Montag"),
+    `gericht` das kombinierte "Kategorie: Beschreibung" aus derselben Funktion.
+
+    TODO prüfen: Bei mehreren Kindern im selben Account muss vor der Auswahl
+    vermutlich zuerst über den "people"-Navigationspunkt (aktuell nur ein
+    Kind im getesteten Account vorhanden) auf `kind.name` gewechselt werden.
+    Diese Umschaltung konnte nicht live geprüft werden.
+    """
     log.info("Bestelle für %s am %s: %s", kind.name, tag, gericht)
-    page.get_by_text(kind.name).click()  # TODO prüfen
-    page.locator(f".menu-day:has-text('{tag}')").get_by_text(gericht, exact=False).click()  # TODO prüfen
+
+    tag_el = page.locator(".speiseplan-tagWbp").filter(has_text=tag)
+    for menu_el in tag_el.locator(".speiseplanMenu").all():
+        kategorie = menu_el.locator(".speiseplan-menu-titel strong").first.inner_text().strip()
+        beschreibung = menu_el.locator("#speiseplanMenuBeschreibung").inner_text().strip()
+        if f"{kategorie}: {beschreibung}" != gericht:
+            continue
+
+        bestell_control = menu_el.locator("[data-testid='order-einzeln']")
+        status = bestell_control.locator("mat-icon").inner_text().strip()
+        ist_gesperrt = "disabled" in (bestell_control.get_attribute("class") or "")
+
+        if status == "check":
+            log.info("Für %s am %s bereits bestellt: %s", kind.name, tag, gericht)
+            return
+        if ist_gesperrt:
+            log.warning("Bestellfrist für %s (%s) bereits abgelaufen – überspringe.", tag, gericht)
+            return
+
+        bestell_control.click()
+        return
+
+    log.warning("Gericht '%s' am %s nicht im Speiseplan gefunden.", gericht, tag)
 
 
 def bestellung_abschliessen(page: Page) -> None:
-    # TODO: finalen Bestätigungsbutton finden – Vorsicht, das ist der irreversible Schritt!
-    page.get_by_role("button", name="Bestellung abschließen").click()  # TODO prüfen
+    """Bestätigt die im Warenkorb gesammelten Bestelländerungen – irreversibler Schritt!
+
+    Per Live-Inspektion bestätigt (Warenkorb ohne ausstehende Änderungen
+    getestet, NICHT tatsächlich bestätigt): Der Warenkorb (#/warenkorb) zeigt
+    eine Tabelle der Änderungen, den Gesamtpreis und einen Button
+    "Zum genannten Preis bestätigen" (ist per <button disabled> deaktiviert,
+    solange keine Änderungen vorliegen). Das Verhalten NACH dem Klick
+    (Erfolgsmeldung o. ä.) konnte nicht geprüft werden, ohne tatsächlich eine
+    Bestellung auszulösen – "Bestellung erfolgreich" ist daher weiterhin eine
+    Annahme und muss beim ersten echten Lauf (am besten mit DRY_RUN=false nur
+    für ein einzelnes, unkritisches Gericht) verifiziert werden.
+    """
+    page.get_by_text("Warenkorb", exact=False).first.click()
+    page.wait_for_load_state("networkidle")
+    page.get_by_role("button", name="Zum genannten Preis bestätigen").click()
     page.wait_for_selector("text=Bestellung erfolgreich", timeout=15000)  # TODO prüfen
     log.info("Bestellung abgeschlossen.")
 
