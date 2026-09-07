@@ -141,10 +141,19 @@ class NtfyConfig:
 
     Ohne gesetztes `topic` sind Benachrichtigungen komplett deaktiviert
     (Default-Verhalten unverändert, siehe sende_ntfy_nachricht()).
+
+    `status_topic` ist ein optionales zweites, separates Topic nur für die
+    Lauf-Zusammenfassung am Ende von main() (immer genau eine Nachricht pro
+    Skript-Ausführung, unabhängig davon, ob etwas bestellt wurde) – gedacht
+    für Auswertung/Automationen (z. B. Home Assistant), damit "letzter Lauf"
+    dort auch an Tagen ohne Bestelländerung sichtbar ist, ohne das normale
+    `topic` (für Push-Benachrichtigungen aufs Handy) mit einer Nachricht pro
+    Tag zu fluten, an dem ohnehin nichts passiert ist.
     """
 
     url: str = "https://ntfy.sh"
     topic: str = ""
+    status_topic: str = ""
     token: str = ""
 
     @classmethod
@@ -152,21 +161,29 @@ class NtfyConfig:
         return cls(
             url=os.environ.get("NTFY_URL", "https://ntfy.sh").rstrip("/"),
             topic=os.environ.get("NTFY_TOPIC", "").strip(),
+            status_topic=os.environ.get("NTFY_STATUS_TOPIC", "").strip(),
             token=os.environ.get("NTFY_TOKEN", "").strip(),
         )
 
 
 def sende_ntfy_nachricht(
-    cfg: NtfyConfig, titel: str, nachricht: str, tags: Optional[list[str]] = None
+    cfg: NtfyConfig,
+    titel: str,
+    nachricht: str,
+    tags: Optional[list[str]] = None,
+    topic: Optional[str] = None,
 ) -> None:
     """Schickt eine Push-Benachrichtigung per ntfy.sh-Publish-API (einfacher
     HTTP-POST an <url>/<topic>, siehe https://docs.ntfy.sh/publish/).
 
-    Ohne gesetztes NTFY_TOPIC ein No-Op. Versand-Fehler (z. B. ntfy nicht
-    erreichbar) dürfen den eigentlichen Bestell-Ablauf nicht zum Absturz
-    bringen und werden daher nur geloggt.
+    Verwendet standardmäßig cfg.topic; `topic` überschreiben, um stattdessen
+    z. B. an cfg.status_topic zu senden (siehe NtfyConfig). Ohne (effektives)
+    Topic ein No-Op. Versand-Fehler (z. B. ntfy nicht erreichbar) dürfen den
+    eigentlichen Bestell-Ablauf nicht zum Absturz bringen und werden daher
+    nur geloggt.
     """
-    if not cfg.topic:
+    ziel_topic = topic if topic is not None else cfg.topic
+    if not ziel_topic:
         return
 
     headers = {"Title": titel.encode("utf-8")}
@@ -177,7 +194,7 @@ def sende_ntfy_nachricht(
 
     try:
         resp = httpx.post(
-            f"{cfg.url}/{cfg.topic}",
+            f"{cfg.url}/{ziel_topic}",
             content=nachricht.encode("utf-8"),
             headers=headers,
             timeout=10,
@@ -574,7 +591,7 @@ def bestelle_fuer_kind(
     dry_run: bool,
     schulferien: Optional[list[tuple[date, date]]] = None,
     ntfy_cfg: Optional[NtfyConfig] = None,
-) -> None:
+) -> list[tuple[str, str]]:
     """Führt den kompletten Ablauf (Login, Auswahl, Bestätigung) für ein Kind
     in einer eigenen Browser-Session gegen dessen eigenen Account aus.
 
@@ -583,6 +600,9 @@ def bestelle_fuer_kind(
     tatsächlich eine neue Bestellung ausgelöst wurde, siehe bestelle_gericht()).
     Fehlschläge werden von main() gemeldet, da dort über alle Kinder hinweg
     entschieden wird, ob zusätzlich eine Sammel-Nachricht sinnvoll ist.
+
+    Gibt die Liste der neu bestellten (Tag, Gericht)-Paare zurück – main()
+    braucht das zusätzlich für die Lauf-Zusammenfassung auf NTFY_STATUS_TOPIC.
     """
     browser, context = erstelle_browser_context(p, pw_cfg)
     page = context.new_page()
@@ -607,10 +627,17 @@ def bestelle_fuer_kind(
 
         if ntfy_cfg and neue_bestellungen:
             uebersicht = "\n".join(f"{tag}: {gericht}" for tag, gericht in neue_bestellungen)
-            titel = f"Bestellt: {kind.name}"
             if dry_run:
-                titel = f"[DRY RUN] {titel}"
+                titel = f"[DRY RUN] Bestellt: {kind.name}"
+                uebersicht = (
+                    "DRY_RUN=true – es wurde NICHTS tatsächlich bestellt, "
+                    "nur eine Vorschau:\n\n" + uebersicht
+                )
+            else:
+                titel = f"Bestellt: {kind.name}"
             sende_ntfy_nachricht(ntfy_cfg, titel, uebersicht, tags=["white_check_mark"])
+
+        return neue_bestellungen
 
     except PWTimeout as e:
         log.error("Timeout beim Warten auf ein Element für %s – vermutlich falscher Selektor: %s", kind.name, e)
@@ -657,10 +684,12 @@ def main() -> None:
     # nicht verhindern; am Ende wird trotzdem ein Fehler gemeldet (wichtig für
     # Cron-Benachrichtigungen).
     fehlgeschlagen: list[str] = []
+    anzahl_neue_bestellungen: dict[str, int] = {}
     with sync_playwright() as p:
         for kind in kinder:
             try:
-                bestelle_fuer_kind(p, pw_cfg, kind, api_key, dry_run, schulferien, ntfy_cfg)
+                neue_bestellungen = bestelle_fuer_kind(p, pw_cfg, kind, api_key, dry_run, schulferien, ntfy_cfg)
+                anzahl_neue_bestellungen[kind.name] = len(neue_bestellungen)
             except Exception as e:
                 log.exception("Ablauf für %s fehlgeschlagen.", kind.name)
                 fehlgeschlagen.append(kind.name)
@@ -670,6 +699,28 @@ def main() -> None:
                     f"Ablauf für {kind.name} fehlgeschlagen: {e}",
                     tags=["x"],
                 )
+
+    # Lauf-Zusammenfassung auf NTFY_STATUS_TOPIC (falls konfiguriert): anders
+    # als die Nachrichten oben auf NTFY_TOPIC wird diese bei JEDEM Lauf genau
+    # einmal verschickt, unabhängig davon, ob etwas neu bestellt wurde – z. B.
+    # für eine Home-Assistant-Automation, die den Zeitpunkt des letzten Laufs
+    # unabhängig vom Bestellergebnis auswerten will.
+    if ntfy_cfg.status_topic:
+        zeilen = [f"{name}: {n} neu bestellt" for name, n in anzahl_neue_bestellungen.items()]
+        zeilen += [f"{name}: fehlgeschlagen" for name in fehlgeschlagen]
+        status_text = "\n".join(zeilen) if zeilen else "Keine Kinder konfiguriert."
+        if dry_run:
+            status_text = "[DRY RUN]\n" + status_text
+        if fehlgeschlagen:
+            tag = "x"
+        elif any(anzahl_neue_bestellungen.values()):
+            tag = "white_check_mark"
+        else:
+            tag = "information_source"
+        sende_ntfy_nachricht(
+            ntfy_cfg, "GFB Lunch Order: Lauf abgeschlossen", status_text,
+            tags=[tag], topic=ntfy_cfg.status_topic,
+        )
 
     if fehlgeschlagen:
         if len(kinder) > 1:

@@ -185,9 +185,30 @@ Einrichtung:
 Fehler beim Versand (z. B. ntfy nicht erreichbar) werden nur geloggt und
 bringen den eigentlichen Bestell-Ablauf nicht zum Absturz.
 
-Seit Home Assistant 2025.5 gibt es eine offizielle ntfy-Core-Integration –
-das gleiche Topic lässt sich also zusätzlich in Home-Assistant-Automationen/
-Dashboards weiterverarbeiten (z. B. Ansage, Verlauf), unabhängig vom Skript.
+### Home Assistant / Automationen: Lauf-Zusammenfassung (`NTFY_STATUS_TOPIC`)
+
+Seit Home Assistant 2025.5 gibt es eine offizielle
+[ntfy-Core-Integration](https://www.home-assistant.io/integrations/ntfy/):
+Sie legt pro abonniertem Topic eine **Event-Entity** an, die bei jeder
+eingehenden Nachricht feuert und deren komplette Attribute (`title`,
+`message`, `tags`, `priority`) für Automationen/Dashboards zur Verfügung
+stellt. Für zuverlässige Automationen auf `tags` matchen (z. B. `x` = Fehler,
+`white_check_mark` = Erfolg, `information_source` = ok, nichts Neues) statt
+den (deutschen) Freitext in `title`/`message` zu parsen.
+
+Wichtig dabei: Auf `NTFY_TOPIC` wird **nur bei einer Änderung oder einem
+Fehler** etwas verschickt (siehe oben) – an einem Tag, an dem für die Woche
+bereits alles bestellt ist, passiert dort also nichts, und die zugehörige
+HA-Event-Entity aktualisiert ihren Zeitstempel nicht. Wer in Home Assistant
+(oder einer anderen Automation) den Zeitpunkt des **letzten Laufs**
+unabhängig vom Bestellergebnis auswerten will, sollte zusätzlich
+`NTFY_STATUS_TOPIC` auf ein zweites, separates Topic setzen: Dorthin geht bei
+**jedem** Lauf genau eine kurze Zusammenfassung (Anzahl neu bestellter Tage
+pro Kind, ggf. Fehlschläge), unabhängig vom Ergebnis – ohne dass dafür das
+Handy-Topic (`NTFY_TOPIC`) mit einer täglichen Nachricht geflutet wird, an
+dem ohnehin nichts passiert ist. Nutzt denselben `NTFY_URL`/`NTFY_TOKEN` wie
+`NTFY_TOPIC`, muss also separat abonniert werden (Schritt 2 oben, mit dem
+Topic-Namen aus `NTFY_STATUS_TOPIC`).
 
 ## Kinder & Regeln anpassen
 
