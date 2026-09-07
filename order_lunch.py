@@ -2,23 +2,25 @@
 GFB Catering – automatische wöchentliche Mittagessen-Bestellung
 =================================================================
 
-Ablauf:
-  1. Login auf https://bestellung-gfb-catering.de/
+Jedes Kind hat einen eigenen GFB-Catering-Account (kein gemeinsamer Account
+mit Kind-Auswahl). Der komplette Ablauf läuft daher separat pro Kind, jeweils
+in einer eigenen Playwright-Session:
+  1. Login auf https://bestellung-gfb-catering.de/ mit den Zugangsdaten des Kindes
   2. Speiseplan der kommenden Woche auslesen (pro Wochentag verfügbare Gerichte)
-  3. Pro Kind: harte Regeln anwenden (Ausschlüsse), danach per Claude-API
-     das passende Gericht aus den verbleibenden Optionen wählen lassen
-  4. Auswahl für jeden Tag/jedes Kind eintragen und Bestellung abschicken
+  3. Harte Regeln anwenden (Ausschlüsse), danach per Claude-API das passende
+     Gericht aus den verbleibenden Optionen wählen lassen
+  4. Auswahl für jeden Tag eintragen und Bestellung abschicken
 
 WICHTIG: Der komplette Ablauf (login(), lese_menueplan(), bestelle_gericht(),
 bestellung_abschliessen()) wurde per Playwright live gegen die echte Seite
 geprüft und mit einer echten Testbestellung (ein Gericht, ein Tag) end-to-end
-bestätigt. Nicht verifiziert ist der Ablauf bei mehreren Kindern im selben
-Account (siehe TODO in bestelle_gericht()), da der getestete Account nur ein
-Kind enthält.
+bestätigt.
 
 Aufruf: python order_lunch.py
 Benötigte Umgebungsvariablen (siehe .env.example):
-  GFB_USERNAME, GFB_PASSWORD, ANTHROPIC_API_KEY
+  ANTHROPIC_API_KEY
+Zugangsdaten pro Kind stehen in der Kinder-Konfiguration, siehe
+config.json.example (Feld KINDER_CONFIG, Default config.json).
 """
 
 import os
@@ -96,6 +98,9 @@ def erstelle_browser_context(p, cfg: PlaywrightConfig) -> tuple[Browser, Browser
 @dataclass
 class Kind:
     name: str
+    # Zugangsdaten des eigenen GFB-Catering-Accounts dieses Kindes.
+    benutzername: str
+    passwort: str
     # Harte Ausschlussregeln, z. B. ["Fisch", "Schwein"]
     ausschluesse: list[str] = field(default_factory=list)
     # Weiche Vorlieben, die der KI als Kontext mitgegeben werden, z. B. "mag Nudelgerichte"
@@ -103,12 +108,18 @@ class Kind:
 
 
 def lade_kinder(config_pfad: str) -> list[Kind]:
-    """Lädt die Kinder-Konfiguration aus einer JSON-Datei (siehe config.json.example)."""
+    """Lädt die Kinder-Konfiguration aus einer JSON-Datei (siehe config.json.example).
+
+    Jeder Eintrag braucht eigene Zugangsdaten (benutzername/passwort), da
+    jedes Kind einen eigenen GFB-Catering-Account hat.
+    """
     with open(config_pfad, encoding="utf-8") as f:
         rohdaten = json.load(f)
     return [
         Kind(
             name=eintrag["name"],
+            benutzername=eintrag["benutzername"],
+            passwort=eintrag["passwort"],
             ausschluesse=eintrag.get("ausschluesse", []),
             vorlieben=eintrag.get("vorlieben", ""),
         )
@@ -239,15 +250,13 @@ Antworte NUR mit dem exakten Gerichtnamen aus der Liste, ohne weitere Erklärung
 
 
 def bestelle_gericht(page: Page, tag: str, kind: Kind, gericht: str) -> None:
-    """Wählt für einen Tag/ein Kind das per KI/Regeln bestimmte Gericht aus.
+    """Wählt für einen Tag das per KI/Regeln bestimmte Gericht aus.
 
-    `tag` ist das volle Label aus lese_menueplan() (z. B. "07.09.26 - Montag"),
-    `gericht` das kombinierte "Kategorie: Beschreibung" aus derselben Funktion.
-
-    TODO prüfen: Bei mehreren Kindern im selben Account muss vor der Auswahl
-    vermutlich zuerst über den "people"-Navigationspunkt (aktuell nur ein
-    Kind im getesteten Account vorhanden) auf `kind.name` gewechselt werden.
-    Diese Umschaltung konnte nicht live geprüft werden.
+    `page` ist bereits im eigenen Account von `kind` eingeloggt (jedes Kind
+    hat einen eigenen GFB-Catering-Account, kein Umschalten innerhalb einer
+    Session nötig). `tag` ist das volle Label aus lese_menueplan() (z. B.
+    "07.09.26 - Montag"), `gericht` das kombinierte "Kategorie: Beschreibung"
+    aus derselben Funktion.
     """
     log.info("Bestelle für %s am %s: %s", kind.name, tag, gericht)
 
@@ -305,9 +314,39 @@ def bestellung_abschliessen(page: Page) -> None:
     log.info("Bestellung abgeschlossen.")
 
 
+def bestelle_fuer_kind(p, pw_cfg: PlaywrightConfig, kind: Kind, api_key: str, dry_run: bool) -> None:
+    """Führt den kompletten Ablauf (Login, Auswahl, Bestätigung) für ein Kind
+    in einer eigenen Browser-Session gegen dessen eigenen Account aus."""
+    browser, context = erstelle_browser_context(p, pw_cfg)
+    page = context.new_page()
+    try:
+        login(page, kind.benutzername, kind.passwort)
+        menueplan = lese_menueplan(page)
+
+        for tag, gerichte in menueplan.items():
+            optionen = waehle_gericht_regelbasiert(gerichte, kind)
+            gericht = waehle_gericht_per_ki(tag, optionen, kind, api_key)
+            if dry_run:
+                log.info("[DRY RUN] Würde bestellen: %s / %s -> %s", tag, kind.name, gericht)
+            else:
+                bestelle_gericht(page, tag, kind, gericht)
+
+        if not dry_run:
+            bestellung_abschliessen(page)
+        else:
+            log.info("DRY_RUN=true – für %s keine tatsächliche Bestellung ausgelöst.", kind.name)
+
+    except PWTimeout as e:
+        log.error("Timeout beim Warten auf ein Element für %s – vermutlich falscher Selektor: %s", kind.name, e)
+        page.screenshot(path=os.path.join(pw_cfg.data_dir, f"error_screenshot_{kind.name}.png"))
+        raise
+    finally:
+        if pw_cfg.trace:
+            context.tracing.stop(path=os.path.join(pw_cfg.data_dir, f"trace_{kind.name}.zip"))
+        browser.close()
+
+
 def main() -> None:
-    username = os.environ["GFB_USERNAME"]
-    password = os.environ["GFB_PASSWORD"]
     api_key = os.environ["ANTHROPIC_API_KEY"]
     dry_run = os.environ.get("DRY_RUN", "true").lower() == "true"
     config_pfad = os.environ.get("KINDER_CONFIG", "config.json")
@@ -315,35 +354,21 @@ def main() -> None:
     pw_cfg = PlaywrightConfig.from_env()
     os.makedirs(pw_cfg.data_dir, exist_ok=True)
 
+    # Jedes Kind hat einen eigenen Account -> eigener Login/eigene Session pro
+    # Kind. Ein Fehler bei einem Account soll den Lauf für die anderen Kinder
+    # nicht verhindern; am Ende wird trotzdem ein Fehler gemeldet (wichtig für
+    # Cron-Benachrichtigungen).
+    fehlgeschlagen: list[str] = []
     with sync_playwright() as p:
-        browser, context = erstelle_browser_context(p, pw_cfg)
-        page = context.new_page()
-        try:
-            login(page, username, password)
-            menueplan = lese_menueplan(page)
+        for kind in kinder:
+            try:
+                bestelle_fuer_kind(p, pw_cfg, kind, api_key, dry_run)
+            except Exception:
+                log.exception("Ablauf für %s fehlgeschlagen.", kind.name)
+                fehlgeschlagen.append(kind.name)
 
-            for tag, gerichte in menueplan.items():
-                for kind in kinder:
-                    optionen = waehle_gericht_regelbasiert(gerichte, kind)
-                    gericht = waehle_gericht_per_ki(tag, optionen, kind, api_key)
-                    if dry_run:
-                        log.info("[DRY RUN] Würde bestellen: %s / %s -> %s", tag, kind.name, gericht)
-                    else:
-                        bestelle_gericht(page, tag, kind, gericht)
-
-            if not dry_run:
-                bestellung_abschliessen(page)
-            else:
-                log.info("DRY_RUN=true – keine tatsächliche Bestellung ausgelöst.")
-
-        except PWTimeout as e:
-            log.error("Timeout beim Warten auf ein Element – vermutlich falscher Selektor: %s", e)
-            page.screenshot(path=os.path.join(pw_cfg.data_dir, "error_screenshot.png"))
-            raise
-        finally:
-            if pw_cfg.trace:
-                context.tracing.stop(path=os.path.join(pw_cfg.data_dir, "trace.zip"))
-            browser.close()
+    if fehlgeschlagen:
+        raise RuntimeError(f"Fehlgeschlagen für: {', '.join(fehlgeschlagen)}")
 
 
 if __name__ == "__main__":
