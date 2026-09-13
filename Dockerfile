@@ -22,4 +22,11 @@ RUN apt-get update && apt-get install -y cron && rm -rf /var/lib/apt/lists/*
 COPY crontab /etc/cron.d/lunch-order-cron
 RUN chmod 0644 /etc/cron.d/lunch-order-cron && crontab /etc/cron.d/lunch-order-cron
 
+# Schreibt die zur Laufzeit gesetzten Umgebungsvariablen (docker-compose
+# env_file, `docker run -e`, Unraid-UI, ...) nach /app/.env, damit der
+# Cron-Job sie sehen kann - siehe entrypoint.sh.
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["cron", "-f"]
