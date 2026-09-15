@@ -1,3 +1,14 @@
+# cron führt Jobs standardmäßig mit /bin/sh (dash) aus, nicht mit bash -
+# /app/.env (siehe entrypoint.sh) enthält aber Bash-spezifische
+# "declare -x"-Zeilen, die dash nicht versteht ("declare: not found").
+# Ohne dieses SHELL bricht das Sourcen der .env lautlos ab (cron verwirft
+# die Job-Ausgabe standardmäßig, siehe MAILTO unten).
+SHELL=/bin/bash
+# Ohne installierten Mail-Transport-Agent verwirft cron jegliche Ausgabe
+# eines Jobs (auch Fehler) mit "No MTA installed, discarding output" -
+# MAILTO="" unterdrückt nur den (ohnehin nutzlosen) Zustellversuch, ändert
+# aber nichts an unserem eigenen Redirect nach /data/order_lunch.log unten.
+MAILTO=""
 # Minute Stunde Tag Monat Wochentag Befehl
 # Läuft täglich um 06:00 Uhr, Umgebungsvariablen werden aus /app/.env geladen.
 # Bewusst täglich statt nur einmal pro Woche: Bestellfristen für die
@@ -6,4 +17,8 @@
 # (idempotent) - bereits bestellte Tage werden nicht angetastet, ein leerer
 # Warenkorb führt zu keiner Aktion (siehe bestelle_gericht()/
 # bestellung_abschliessen() in order_lunch.py).
-0 6 * * * . /app/.env && cd /app && python order_lunch.py >> /data/order_lunch.log 2>&1
+# Exit-Code wird explizit mitgeloggt, damit auch ein Abbruch VOR
+# order_lunch.py (z. B. fehlendes/kaputtes /app/.env, Shell-Fehler) im Log
+# sichtbar ist, statt lautlos zu verschwinden - genau das ist bereits einmal
+# passiert (SHELL-Problem oben) und war ohne diese Zeile nicht diagnostizierbar.
+0 6 * * * { . /app/.env && cd /app && python order_lunch.py; echo "[cron] Lauf beendet, exit code $?"; } >> /data/order_lunch.log 2>&1
