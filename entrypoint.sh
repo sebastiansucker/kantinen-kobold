@@ -22,4 +22,13 @@ mkdir -p /data
     fi
 } >> /data/order_lunch.log 2>&1
 
+# Spiegelt order_lunch.log live nach stdout, damit `docker logs` etwas
+# Nützliches zeigt statt leer zu bleiben (der eigentliche Hauptprozess ist
+# cron -f, der selbst kaum etwas ausgibt). -F statt -f, damit das Mitlesen
+# auch über eine Log-Rotation hinweg funktioniert, falls die mal eingeführt
+# wird. Läuft im Hintergrund weiter, auch nachdem `exec` unten cron -f zur
+# neuen PID 1 macht.
+touch /data/order_lunch.log
+tail -F /data/order_lunch.log &
+
 exec "$@"
