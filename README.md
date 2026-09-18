@@ -325,11 +325,22 @@ bestellen (z. B. bei Ferienbetreuung mit Verpflegung).
 In `crontab`: `0 6 * * *` = **täglich** um 06:00 Uhr. Format: Minute Stunde
 Tag Monat Wochentag (0 = Sonntag … 6 = Samstag).
 
-Bewusst täglich statt nur einmal pro Woche: Die Bestellfrist für die
-Folgewoche kann schon Mittwoch/Donnerstag der Vorwoche ablaufen – ein
-einzelner Wochenlauf (z. B. nur Montag) könnte das verpassen, falls der
-Speiseplan für die Folgewoche zu diesem Zeitpunkt noch nicht (vollständig)
-sichtbar war. Wiederholte Läufe sind sicher:
+Fachlich würde inzwischen ein **Wochenlauf** (`0 6 * * 1`, montags)
+genügen: Jeder Lauf bestellt alles, was die Seite gerade freigeschaltet hat
+– nicht nur die kommende Woche. Der Speiseplan zeigt immer nur einen
+Kalendermonat; das Skript blättert über die Monatsnavigation so weit vor,
+wie bestellbare Tage angeboten werden (siehe `naechster_monat()`),
+typischerweise also mehrere Wochen im Voraus. Bestellfristen, die schon in
+der Vorwoche ablaufen, sind damit kein Argument mehr für einen täglichen
+Lauf.
+
+Vorerst läuft es trotzdem bewusst täglich, solange die Monatsnavigation im
+echten Betrieb beobachtet wird: Ein täglicher Lauf zeigt schon am nächsten
+Morgen, ob das Blättern stabil funktioniert, und ein einzelner Fehlschlag
+wird am Folgetag automatisch nachgeholt. Sobald das ein paar Wochen sauber
+läuft, kann auf wöchentlich umgestellt werden.
+
+Beide Varianten sind gefahrlos – wiederholte Läufe sind sicher:
 
 - `bestelle_gericht()` lässt einen Tag unangetastet, sobald für ihn
   **irgendeine** Option bereits bestellt ist (`check`-Status) – auch wenn

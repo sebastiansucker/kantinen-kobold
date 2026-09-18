@@ -11,12 +11,25 @@ SHELL=/bin/bash
 MAILTO=""
 # Minute Stunde Tag Monat Wochentag Befehl
 # Läuft täglich um 06:00 Uhr, Umgebungsvariablen werden aus /app/.env geladen.
-# Bewusst täglich statt nur einmal pro Woche: Bestellfristen für die
-# Folgewoche können schon Mittwoch/Donnerstag der Vorwoche ablaufen, ein
-# einzelner Wochenlauf könnte das verpassen. Wiederholte Läufe sind sicher
-# (idempotent) - bereits bestellte Tage werden nicht angetastet, ein leerer
-# Warenkorb führt zu keiner Aktion (siehe bestelle_gericht()/
-# bestellung_abschliessen() in order_lunch.py).
+#
+# Fachlich würde ein Wochenlauf reichen, seit das Skript nicht mehr nur den
+# aktuell angezeigten Monat bestellt, sondern über die Monatsnavigation so
+# weit vorblättert, wie die Seite bestellbare Tage anbietet (siehe
+# naechster_monat()/bestelle_fuer_kind() in order_lunch.py): Jeder Lauf
+# bestellt alles, was gerade freigeschaltet ist - typischerweise mehrere
+# Wochen im Voraus. Bestellfristen, die schon in der Vorwoche ablaufen, sind
+# damit kein Argument mehr für einen täglichen Lauf.
+#
+# Vorerst trotzdem bewusst täglich, solange die neue Monatsnavigation im
+# echten Betrieb beobachtet wird: Ein täglicher Lauf zeigt schon am nächsten
+# Morgen, ob das Blättern stabil funktioniert, statt eine ganze Woche auf das
+# nächste Signal zu warten - und ein einzelner Fehlschlag wird am Folgetag
+# automatisch nachgeholt. Sobald das ein paar Wochen sauber läuft, kann hier
+# auf "0 6 * * 1" (montags) umgestellt werden.
+#
+# Wiederholte Läufe sind sicher (idempotent) - bereits bestellte Tage werden
+# nicht angetastet, ein leerer Warenkorb führt zu keiner Aktion (siehe
+# bestelle_gericht()/bestellung_abschliessen() in order_lunch.py).
 # Exit-Code wird explizit mitgeloggt, damit auch ein Abbruch VOR
 # order_lunch.py (z. B. fehlendes/kaputtes /app/.env, Shell-Fehler) im Log
 # sichtbar ist, statt lautlos zu verschwinden - genau das ist bereits einmal
