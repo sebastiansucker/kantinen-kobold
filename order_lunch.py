@@ -6,11 +6,13 @@ Jedes Kind hat einen eigenen GFB-Catering-Account (kein gemeinsamer Account
 mit Kind-Auswahl). Der komplette Ablauf läuft daher separat pro Kind, jeweils
 in einer eigenen Playwright-Session:
   1. Login auf https://bestellung-gfb-catering.de/ mit den Zugangsdaten des Kindes
-  2. Speiseplan der kommenden Woche auslesen (pro Wochentag verfügbare
-     Gerichte), Tage in den Schulferien werden dabei standardmäßig
-     übersprungen (siehe NUR_AUSSERHALB_SCHULFERIEN, lade_schulferien() –
-     Termine kommen dynamisch von einer öffentlichen API, mit
-     schulferien.json als Fallback)
+  2. Speiseplan auslesen (pro Tag verfügbare Gerichte) – und zwar so weit,
+     wie die Seite bestellbare Tage anbietet: sie zeigt immer nur einen
+     Kalendermonat, es wird daher Monat für Monat vorgeblättert, bis kein
+     weiterer Monat mehr verfügbar ist (siehe naechster_monat()). Tage in
+     den Schulferien werden dabei standardmäßig übersprungen (siehe
+     NUR_AUSSERHALB_SCHULFERIEN, lade_schulferien() – Termine kommen
+     dynamisch von einer öffentlichen API, mit schulferien.json als Fallback)
   3. Harte Regeln anwenden (Ausschlüsse wie Fisch/Fleisch), danach das
      passende Gericht wählen – regelbasiert per Kategorie-Präferenz
      (bevorzugte_kategorien, z. B. "möglichst DGE"), oder falls für ein Kind
@@ -390,12 +392,95 @@ def login(page: Page, username: str, password: str) -> None:
         pass  # Kein Dialog vorhanden
 
 
+# Monatsnavigation des Speiseplans, per Live-Inspektion bestätigt:
+#   div#kalenderPicker
+#     button > mat-icon "chevron_left"    – ein Monat zurück
+#     div#kalenderDatum                   – aktuell gezeigter Monat, z. B. "September"
+#     button > mat-icon "chevron_right"   – ein Monat vor, <button disabled> am Ende
+# Die beiden Buttons haben KEINE id, kein data-testid, keine Klasse und kein
+# aria-label - nur den mat-icon-Ligaturtext. Der Zugriff läuft deshalb über
+# den Container #kalenderPicker plus Icon-Text.
+MONAT_VOR_SELECTOR = '#kalenderPicker button:has(mat-icon:text-is("chevron_right"))'
+MONAT_ANZEIGE_SELECTOR = "#kalenderDatum"
+
+# Sicherheitsnetz gegen eine Endlosschleife, falls die Seite den
+# "chevron_right"-Button wider Erwarten nie deaktiviert. Regulär bricht die
+# Schleife über den disabled-Zustand ab (siehe naechster_monat()).
+MAX_MONATE = 12
+
+
+def _sichtbarer_monat(page: Page) -> str:
+    """Liest den aktuell im Speiseplan angezeigten Monat (z. B. "September").
+
+    #kalenderDatum enthält neben dem Monatsnamen auch ein <mat-icon>, dessen
+    Ligatur-Text ("calendar_today") in inner_text() mit auftaucht - der
+    Monatsname steht im <span> daneben. Ohne diese Einschränkung landet
+    "calendar_today" in den Logmeldungen (live beobachtet).
+    """
+    span = page.locator(f"{MONAT_ANZEIGE_SELECTOR} span")
+    if span.count():
+        return span.first.inner_text().strip()
+    # Fallback, falls die Seite die Struktur ändert: Icon-Zeile herausfiltern.
+    text = page.locator(MONAT_ANZEIGE_SELECTOR).inner_text().strip()
+    return " ".join(z for z in text.splitlines() if z.strip() != "calendar_today").strip()
+
+
+def oeffne_speiseplan(page: Page) -> None:
+    """Öffnet den Speiseplan-Tab und wartet, bis die Tageskarten gerendert sind."""
+    page.get_by_text("Speiseplan", exact=False).first.click()
+    page.wait_for_load_state("networkidle")
+    # networkidle sagt nur, dass keine Requests mehr laufen - Angular braucht
+    # danach noch etwas Zeit, um die Tag-Karten clientseitig zu rendern.
+    # Ohne dieses Warten kann tage weiter unten leer sein (live beobachtet).
+    page.locator(".speiseplan-tagWbp").first.wait_for(state="visible", timeout=15000)
+
+
+def naechster_monat(page: Page) -> bool:
+    """Blättert den Speiseplan einen Monat vor.
+
+    Gibt False zurück, wenn es keinen weiteren Monat gibt - die Seite
+    deaktiviert den "chevron_right"-Button am Ende des bestellbaren
+    Zeitraums (<button disabled>, live bestätigt). Sonst True, sobald der
+    Folgemonat gerendert ist.
+
+    Wichtig: Nach dem Blättern rendert Angular die komplette Tagesliste neu.
+    Vorher geholte Locator-Objekte auf .speiseplan-tagWbp zeigen danach ins
+    Leere, jeder Monat muss frisch eingelesen werden (siehe
+    lese_menueplan()).
+    """
+    button = page.locator(MONAT_VOR_SELECTOR)
+    if button.is_disabled():
+        return False
+
+    vorher = _sichtbarer_monat(page)
+    button.click()
+    # Deterministisch auf den Monatswechsel warten statt auf eine feste
+    # Zeitspanne: die Monatsanzeige wechselt genau dann, wenn die neue
+    # Tagesliste steht.
+    page.wait_for_function(
+        "([sel, alt]) => { const e = document.querySelector(sel);"
+        "  return e && e.innerText.includes(alt) === false; }",
+        arg=[MONAT_ANZEIGE_SELECTOR, vorher],
+        timeout=15000,
+    )
+    page.locator(".speiseplan-tagWbp").first.wait_for(state="visible", timeout=15000)
+    return True
+
+
 def lese_menueplan(page: Page, schulferien: Optional[list[tuple[date, date]]] = None) -> dict:
     """
-    Liest den Speiseplan aus und gibt nur noch änderbare Tage zurück (Tage,
-    deren Bestellfrist bereits abgelaufen ist, werden übersprungen). Ist
-    `schulferien` gesetzt (siehe lade_schulferien()), werden zusätzlich Tage
-    übersprungen, die in die Schulferien fallen.
+    Liest den Speiseplan des AKTUELL angezeigten Monats aus und gibt nur noch
+    änderbare Tage zurück (Tage, deren Bestellfrist bereits abgelaufen ist,
+    werden übersprungen). Ist `schulferien` gesetzt (siehe
+    lade_schulferien()), werden zusätzlich Tage übersprungen, die in die
+    Schulferien fallen.
+
+    Die Seite zeigt immer genau einen Kalendermonat (live bestätigt: im
+    September 01.09.-30.09., nach einem Klick auf "chevron_right"
+    01.10.-30.10.). Über den Monat hinaus blättert naechster_monat(); der
+    Aufrufer verarbeitet Monat für Monat, weil die Tageskarten früherer
+    Monate nach dem Blättern nicht mehr im DOM stehen (siehe
+    bestelle_fuer_kind()).
 
     Per Live-Inspektion bestätigte DOM-Struktur (Angular/Material-App):
       div.speiseplan-tagWbp                          – ein Tag
@@ -416,13 +501,6 @@ def lese_menueplan(page: Page, schulferien: Optional[list[tuple[date, date]]] = 
         ...
     }
     """
-    page.get_by_text("Speiseplan", exact=False).first.click()
-    page.wait_for_load_state("networkidle")
-    # networkidle sagt nur, dass keine Requests mehr laufen - Angular braucht
-    # danach noch etwas Zeit, um die Tag-Karten clientseitig zu rendern.
-    # Ohne dieses Warten kann tage weiter unten leer sein (live beobachtet).
-    page.locator(".speiseplan-tagWbp").first.wait_for(state="visible", timeout=15000)
-
     menueplan: dict[str, list[str]] = {}
     tage = page.locator(".speiseplan-tagWbp").all()
     for tag_el in tage:
@@ -448,7 +526,10 @@ def lese_menueplan(page: Page, schulferien: Optional[list[tuple[date, date]]] = 
             gerichte.append(f"{kategorie}: {beschreibung}")
         menueplan[tag_name] = gerichte
 
-    log.info("Speiseplan gelesen (nur änderbare Tage): %s", menueplan)
+    log.info(
+        "Speiseplan für %s gelesen (nur änderbare Tage): %s",
+        _sichtbarer_monat(page), menueplan,
+    )
     return menueplan
 
 
@@ -702,23 +783,50 @@ def bestelle_fuer_kind(
     page = context.new_page()
     try:
         login(page, kind.benutzername, kind.passwort)
-        menueplan = lese_menueplan(page, schulferien)
+        oeffne_speiseplan(page)
 
         neue_bestellungen: list[tuple[str, str]] = []
         bestellte_tage: list[str] = []
-        for tag, gerichte in menueplan.items():
-            optionen = waehle_gericht_regelbasiert(gerichte, kind)
-            gericht = waehle_gericht(tag, optionen, kind, api_key)
-            if dry_run:
-                log.info("[DRY RUN] Würde bestellen: %s / %s -> %s", tag, kind.name, gericht)
-                neue_bestellungen.append((tag, gericht))
-                bestellte_tage.append(tag)
-            else:
-                ist_bestellt, ist_neu = bestelle_gericht(page, tag, kind, gericht)
-                if ist_neu:
+
+        # Monat für Monat durchgehen, so weit die Seite Tage anbietet - die
+        # Seite zeigt immer nur einen Kalendermonat, ohne Blättern würde der
+        # Lauf still am Monatsende aufhören (genau dieser Fehler: ein Lauf
+        # Mitte September bestellte nur bis zum 30.09., obwohl der Oktober
+        # längst bestellbar war).
+        #
+        # Wichtig: Lesen UND Bestellen müssen pro Monat zusammen passieren,
+        # solange dieser Monat angezeigt wird. bestelle_gericht() sucht die
+        # Tageskarte im aktuellen DOM (.speiseplan-tagWbp) - nach dem
+        # Blättern sind die Karten des Vormonats dort nicht mehr vorhanden.
+        # Ein "erst alle Monate lesen, dann alles bestellen" würde deshalb
+        # für jeden Tag außer denen des zuletzt gezeigten Monats fehlschlagen.
+        for monat_nr in range(1, MAX_MONATE + 1):
+            menueplan = lese_menueplan(page, schulferien)
+            for tag, gerichte in menueplan.items():
+                optionen = waehle_gericht_regelbasiert(gerichte, kind)
+                gericht = waehle_gericht(tag, optionen, kind, api_key)
+                if dry_run:
+                    log.info("[DRY RUN] Würde bestellen: %s / %s -> %s", tag, kind.name, gericht)
                     neue_bestellungen.append((tag, gericht))
-                if ist_bestellt:
                     bestellte_tage.append(tag)
+                else:
+                    ist_bestellt, ist_neu = bestelle_gericht(page, tag, kind, gericht)
+                    if ist_neu:
+                        neue_bestellungen.append((tag, gericht))
+                    if ist_bestellt:
+                        bestellte_tage.append(tag)
+
+            if not naechster_monat(page):
+                log.info(
+                    "Kein weiterer bestellbarer Monat nach %s – Speiseplan vollständig durchlaufen.",
+                    _sichtbarer_monat(page),
+                )
+                break
+        else:
+            log.warning(
+                "Abbruch nach %d Monaten (MAX_MONATE) – die Seite bot immer noch weitere "
+                "Monate an. Falls das kein Fehler ist, MAX_MONATE erhöhen.", MAX_MONATE,
+            )
 
         if not dry_run:
             bestellung_abschliessen(page)
