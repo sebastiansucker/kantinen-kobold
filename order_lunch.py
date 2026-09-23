@@ -526,9 +526,18 @@ def lese_menueplan(page: Page, schulferien: Optional[list[tuple[date, date]]] = 
             gerichte.append(f"{kategorie}: {beschreibung}")
         menueplan[tag_name] = gerichte
 
+    try:
+        sichtbarer_monat = _sichtbarer_monat(page)
+    except PWTimeout:
+        # Diese Ausgabe ist rein informativ - ein Timeout beim Auslesen des
+        # Monatsnamens (z. B. weil die Seite kurz hakt) darf den bereits
+        # eingelesenen `menueplan` nicht verwerfen (live beobachtet: killte
+        # sonst den kompletten Lauf für das Kind, obwohl alle Tage schon
+        # ausgelesen waren).
+        sichtbarer_monat = "?"
     log.info(
         "Speiseplan für %s gelesen (nur änderbare Tage): %s",
-        _sichtbarer_monat(page), menueplan,
+        sichtbarer_monat, menueplan,
     )
     return menueplan
 
