@@ -392,16 +392,21 @@ def login(page: Page, username: str, password: str) -> None:
         pass  # Kein Dialog vorhanden
 
 
-# Monatsnavigation des Speiseplans, per Live-Inspektion bestätigt:
-#   div#kalenderPicker
-#     button > mat-icon "chevron_left"    – ein Monat zurück
-#     div#kalenderDatum                   – aktuell gezeigter Monat, z. B. "September"
-#     button > mat-icon "chevron_right"   – ein Monat vor, <button disabled> am Ende
-# Die beiden Buttons haben KEINE id, kein data-testid, keine Klasse und kein
-# aria-label - nur den mat-icon-Ligaturtext. Der Zugriff läuft deshalb über
-# den Container #kalenderPicker plus Icon-Text.
-MONAT_VOR_SELECTOR = '#kalenderPicker button:has(mat-icon:text-is("chevron_right"))'
-MONAT_ANZEIGE_SELECTOR = "#kalenderDatum"
+# Monatsnavigation des Speiseplans, per Live-Inspektion bestätigt (Stand
+# 28.09.2026):
+#   div.speiseplan-kalender-zeitraum
+#     button > mat-icon "chevron_left"     – ein Monat zurück
+#     div#speiseplan-kalender-datum        – aktuell gezeigter Monat, z. B. "September"
+#     button.chevron-rechts > mat-icon "chevron_right"
+#                                          – ein Monat vor, <button disabled> am Ende
+# Bis ca. 18.09.2026 hießen die Elemente noch div#kalenderPicker und
+# div#kalenderDatum - die Seite hat sie ohne Vorwarnung umbenannt, danach lief
+# jeder Lauf beim Blättern in einen 15-s-Timeout (live beobachtet am 23. und
+# 28.09.2026). Der Vor-Button wird deshalb bewusst über Container-Klasse plus
+# mat-icon-Ligaturtext gesucht statt über die erst neu hinzugekommene Klasse
+# "chevron-rechts" oder das aria-label ("Zeitpunkt Vor").
+MONAT_VOR_SELECTOR = '.speiseplan-kalender-zeitraum button:has(mat-icon:text-is("chevron_right"))'
+MONAT_ANZEIGE_SELECTOR = "#speiseplan-kalender-datum"
 
 # Sicherheitsnetz gegen eine Endlosschleife, falls die Seite den
 # "chevron_right"-Button wider Erwarten nie deaktiviert. Regulär bricht die
@@ -412,17 +417,19 @@ MAX_MONATE = 12
 def _sichtbarer_monat(page: Page) -> str:
     """Liest den aktuell im Speiseplan angezeigten Monat (z. B. "September").
 
-    #kalenderDatum enthält neben dem Monatsnamen auch ein <mat-icon>, dessen
-    Ligatur-Text ("calendar_today") in inner_text() mit auftaucht - der
-    Monatsname steht im <span> daneben. Ohne diese Einschränkung landet
-    "calendar_today" in den Logmeldungen (live beobachtet).
+    MONAT_ANZEIGE_SELECTOR enthält neben dem Monatsnamen auch ein <mat-icon>,
+    dessen Ligatur-Text (aktuell "date_range", früher "calendar_today") in
+    inner_text() mit auftaucht - der Monatsname steht im <span> daneben. Ohne
+    diese Einschränkung landet der Icon-Name in den Logmeldungen (live
+    beobachtet).
     """
     span = page.locator(f"{MONAT_ANZEIGE_SELECTOR} span")
     if span.count():
         return span.first.inner_text().strip()
     # Fallback, falls die Seite die Struktur ändert: Icon-Zeile herausfiltern.
     text = page.locator(MONAT_ANZEIGE_SELECTOR).inner_text().strip()
-    return " ".join(z for z in text.splitlines() if z.strip() != "calendar_today").strip()
+    icons = {"date_range", "calendar_today"}
+    return " ".join(z for z in text.splitlines() if z.strip() not in icons).strip()
 
 
 def oeffne_speiseplan(page: Page) -> None:
@@ -467,6 +474,15 @@ def naechster_monat(page: Page) -> bool:
     return True
 
 
+# Ein Menü ist nur bestellbar, wenn es ein Bestell-Control hat. Live
+# beobachtet (28.09.2026, Speiseplan November): noch nicht veröffentlichte
+# Menüs stehen schon mit Kategorienamen im Plan, haben aber weder
+# #speiseplanMenuBeschreibung noch [data-testid='order-einzeln'] - nur ein
+# "lock"-Icon (div#gesperrt). Ohne diesen Filter lief jeder Zugriff auf
+# Beschreibung/Bestell-Control solcher Menüs in einen 15-s-Timeout.
+BESTELLBARES_MENU_SELECTOR = ".speiseplanMenu:has([data-testid='order-einzeln'])"
+
+
 def lese_menueplan(page: Page, schulferien: Optional[list[tuple[date, date]]] = None) -> dict:
     """
     Liest den Speiseplan des AKTUELL angezeigten Monats aus und gibt nur noch
@@ -493,6 +509,9 @@ def lese_menueplan(page: Page, schulferien: Optional[list[tuple[date, date]]] = 
             mat-icon-Text "check"                     – aktuell für diesen Tag bestellt
             mat-icon-Text "add"                       – nicht bestellt, klickbar zum Bestellen
             mat-icon-Text "remove_shopping_cart"       – für vergangene/gesperrte Tage (informativ)
+          Noch nicht veröffentlichte Menüs haben weder Beschreibung noch
+          Bestell-Control, nur div#gesperrt > mat-icon "lock" – werden über
+          BESTELLBARES_MENU_SELECTOR ausgefiltert.
 
     Rückgabeformat (Schlüssel ist das volle Datum+Wochentag-Label, da ein
     Monat mehrere gleichnamige Wochentage enthält):
@@ -510,7 +529,10 @@ def lese_menueplan(page: Page, schulferien: Optional[list[tuple[date, date]]] = 
             log.info("Überspringe %s – Schulferien.", tag_name)
             continue
 
-        menu_els = tag_el.locator(".speiseplanMenu").all()
+        menu_els = tag_el.locator(BESTELLBARES_MENU_SELECTOR).all()
+        if not menu_els:
+            log.info("Überspringe %s – noch kein Menü bestellbar (gesperrt/nicht veröffentlicht).", tag_name)
+            continue
         aenderbar = any(
             "disabled" not in (m.locator("[data-testid='order-einzeln']").get_attribute("class") or "")
             for m in menu_els
@@ -530,10 +552,12 @@ def lese_menueplan(page: Page, schulferien: Optional[list[tuple[date, date]]] = 
         sichtbarer_monat = _sichtbarer_monat(page)
     except PWTimeout:
         # Diese Ausgabe ist rein informativ - ein Timeout beim Auslesen des
-        # Monatsnamens (z. B. weil die Seite kurz hakt) darf den bereits
-        # eingelesenen `menueplan` nicht verwerfen (live beobachtet: killte
-        # sonst den kompletten Lauf für das Kind, obwohl alle Tage schon
-        # ausgelesen waren).
+        # Monatsnamens darf den bereits eingelesenen `menueplan` nicht
+        # verwerfen (live beobachtet am 23.09.2026: killte sonst den
+        # kompletten Lauf für das Kind, obwohl alle Tage schon ausgelesen
+        # waren). Ursache damals war eigentlich die umbenannte
+        # Monatsanzeige (siehe MONAT_ANZEIGE_SELECTOR) - naechster_monat()
+        # scheitert in so einem Fall trotzdem, aber mit klarerem Fehler.
         sichtbarer_monat = "?"
     log.info(
         "Speiseplan für %s gelesen (nur änderbare Tage): %s",
@@ -685,7 +709,7 @@ def bestelle_gericht(page: Page, tag: str, kind: Kind, gericht: str) -> tuple[bo
     zurückdrehen.
     """
     tag_el = page.locator(".speiseplan-tagWbp").filter(has_text=tag)
-    menu_els = tag_el.locator(".speiseplanMenu").all()
+    menu_els = tag_el.locator(BESTELLBARES_MENU_SELECTOR).all()
 
     for menu_el in menu_els:
         bestell_control = menu_el.locator("[data-testid='order-einzeln']")
