@@ -244,7 +244,11 @@ Jedes Kind hat einen eigenen GFB-Catering-Account:
 - **`ausschluesse`**: "Fisch" und "Fleisch" werden über das Kost-Kennzeichen
   erkannt, das die Seite jedem Gericht als ersten Buchstaben in der letzten
   Klammer der Beschreibung mitgibt (`K` = vegetarisch, `F` = Fisch,
-  `G` = Fleisch – z. B. sichtbar am Blatt-/Fisch-Icon neben dem Gericht).
+  `G` = Geflügel/Fleisch, `R` = Rind – z. B. sichtbar am Blatt-/Fisch-Icon
+  neben dem Gericht; die Klammer fehlt auf der Seite manchmal, das
+  Kennzeichen wird trotzdem erkannt). "Fleisch" schließt alles aus, was
+  weder `K` noch `F` ist, damit auch neu auftauchende Kennzeichen (wie `R`
+  im Oktober 2026) nicht als vegetarisch durchrutschen.
   Das ist zuverlässiger als eine Textsuche, da Gerichtnamen wie
   "Lachswürfel" oder "Hähnchenragout" die Wörter "Fisch"/"Fleisch" gar
   nicht enthalten. Alle anderen Einträge (z. B. `"Nüsse"`) werden weiterhin

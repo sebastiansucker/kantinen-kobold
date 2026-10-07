@@ -600,20 +600,44 @@ def lese_menueplan(page: Page, schulferien: Optional[list[tuple[date, date]]] = 
 
 # Kost-Kennzeichen, das die Seite jedem Gericht mitgibt (letzte Klammer der
 # Beschreibung, z. B. "... (F, Ia, IV, VII)"): K = vegetarisch, F = Fisch,
-# G = Fleisch. Per Live-Inspektion bestätigt (u. a. sichtbar als Blatt-/
-# Fisch-Icon neben dem Gericht). Zuverlässiger als Textsuche, da Gerichtnamen
-# das Wort "Fisch"/"Fleisch" oft gar nicht enthalten (z. B. "Lachswürfel",
-# "Hähnchenragout").
-KOST_KENNZEICHEN_FUER_AUSSCHLUSS = {
-    "fisch": "F",
-    "fleisch": "G",
-}
+# G = Geflügel/Fleisch, R = Rind. Per Live-Inspektion bestätigt (u. a.
+# sichtbar als Blatt-/Fisch-Icon neben dem Gericht). Zuverlässiger als
+# Textsuche, da Gerichtnamen das Wort "Fisch"/"Fleisch" oft gar nicht
+# enthalten (z. B. "Lachswürfel", "Hähnchenragout").
+#
+# "Fleisch" ist bewusst als "alles außer K und F" definiert statt als feste
+# Liste: R tauchte erst im Oktober 2026 auf ("Rindergulasch", 22.10.) und
+# rutschte bei einer reinen G-Liste als vegetarisch durch. Ein künftiges
+# unbekanntes Kennzeichen (z. B. für Schwein) schließt damit lieber ein
+# Gericht zu viel aus als ein Fleischgericht durchzulassen.
+KOST_KENNZEICHEN_VEGETARISCH = "K"
+KOST_KENNZEICHEN_FISCH = "F"
+KOST_KENNZEICHEN_AUSSCHLUESSE = {"fisch", "fleisch"}
 
 
 def _kost_kennzeichen(beschreibung: str) -> Optional[str]:
-    """Extrahiert K/F/G aus der letzten Klammer der Gerichtbeschreibung."""
-    treffer = re.findall(r"\(([A-Z])[,)]", beschreibung)
-    return treffer[-1] if treffer else None
+    """Extrahiert das Kost-Kennzeichen (K/F/G/R/…) aus der Gerichtbeschreibung.
+
+    Es steht vor der Liste der Allergen-Codes (römische Ziffern), meist in
+    Klammern ("(K, Ia, VII)"), live aber auch ohne ("… Wurstgulasch (1,3,5),
+    Tomaten-Gurken-Salat G, Ia, IX") oder mit nachgestelltem Code
+    ("(G, Ia, X), IX"). Gesucht wird daher ein einzelner Großbuchstabe,
+    direkt gefolgt von einem Allergen-Code; bei mehreren Treffern zählt der
+    letzte.
+    """
+    treffer = re.findall(
+        r"(?<![A-Za-zÄÖÜäöüß])([A-Z])(?=\s*,\s*[IVX]+[a-z]?\b)|\(([A-Z])\)", beschreibung
+    )
+    return "".join(treffer[-1]) if treffer else None
+
+
+def _per_kennzeichen_ausgeschlossen(kennzeichen: Optional[str], ausschluss: str) -> bool:
+    """Prüft einen "Fisch"/"Fleisch"-Ausschluss anhand des Kost-Kennzeichens."""
+    if kennzeichen is None:
+        return False
+    if ausschluss == "fisch":
+        return kennzeichen == KOST_KENNZEICHEN_FISCH
+    return kennzeichen not in (KOST_KENNZEICHEN_VEGETARISCH, KOST_KENNZEICHEN_FISCH)
 
 
 def waehle_gericht_regelbasiert(gerichte: list[str], kind: Kind) -> list[str]:
@@ -623,16 +647,12 @@ def waehle_gericht_regelbasiert(gerichte: list[str], kind: Kind) -> list[str]:
     Kennzeichen der Seite erkannt (siehe _kost_kennzeichen()), alle anderen
     Ausschlüsse per Textsuche in der Beschreibung.
     """
-    kennzeichen_ausschluesse = {
-        KOST_KENNZEICHEN_FUER_AUSSCHLUSS[a.lower()]
-        for a in kind.ausschluesse
-        if a.lower() in KOST_KENNZEICHEN_FUER_AUSSCHLUSS
-    }
-    text_ausschluesse = [a for a in kind.ausschluesse if a.lower() not in KOST_KENNZEICHEN_FUER_AUSSCHLUSS]
+    kennzeichen_ausschluesse = [a.lower() for a in kind.ausschluesse if a.lower() in KOST_KENNZEICHEN_AUSSCHLUESSE]
+    text_ausschluesse = [a for a in kind.ausschluesse if a.lower() not in KOST_KENNZEICHEN_AUSSCHLUESSE]
 
     gefiltert = [
         g for g in gerichte
-        if _kost_kennzeichen(g) not in kennzeichen_ausschluesse
+        if not any(_per_kennzeichen_ausgeschlossen(_kost_kennzeichen(g), a) for a in kennzeichen_ausschluesse)
         and not any(ausschluss.lower() in g.lower() for ausschluss in text_ausschluesse)
     ]
     return gefiltert or gerichte  # Fallback: falls alles ausgeschlossen ist, alle anzeigen
