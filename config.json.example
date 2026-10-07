@@ -5,6 +5,7 @@
     "passwort": "passwort-kind-1",
     "ausschluesse": ["Fisch", "Fleisch"],
     "bevorzugte_kategorien": ["DGE", "Classic", "BIO-Veggie"],
+    "bevorzugte_gerichte": ["Milchreis", "Grießbrei", "Quarkkeulchen", "Hefeklöße", "Eierkuchen", "Kaiserschmarrn"],
     "vorlieben": ""
   },
   {
