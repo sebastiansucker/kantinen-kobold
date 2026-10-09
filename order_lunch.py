@@ -14,7 +14,9 @@ in einer eigenen Playwright-Session:
      NUR_AUSSERHALB_SCHULFERIEN, lade_schulferien() – Termine kommen
      dynamisch von einer öffentlichen API, mit schulferien.json als Fallback)
   3. Harte Regeln anwenden (Ausschlüsse wie Fisch/Fleisch), danach das
-     passende Gericht wählen – regelbasiert per Kategorie-Präferenz
+     passende Gericht wählen – ein angebotenes Lieblingsgericht (z. B.
+     Milchreis, siehe Kind.bevorzugte_gerichte) gewinnt immer, sonst
+     regelbasiert per Kategorie-Präferenz
      (bevorzugte_kategorien, z. B. "möglichst DGE"), oder falls für ein Kind
      keine gesetzt ist, per Claude-API anhand freier Vorlieben
   4. Auswahl für jeden Tag eintragen und Bestellung abschicken
@@ -228,6 +230,35 @@ class Kind:
     # Weiche Vorlieben, die der KI als Kontext mitgegeben werden, z. B. "mag
     # Nudelgerichte". Wird nur verwendet, wenn bevorzugte_kategorien leer ist.
     vorlieben: str = ""
+    # Stichworte für Gerichte, die – sofern nach den Ausschlüssen angeboten –
+    # VOR der Kategorie-Präferenz gewinnen (Textsuche in der Beschreibung,
+    # Groß-/Kleinschreibung egal). Default: STANDARD_BEVORZUGTE_GERICHTE
+    # (süße Hauptgerichte wie Milchreis/Grießbrei), [] schaltet das ab.
+    bevorzugte_gerichte: list[str] = field(default_factory=lambda: list(STANDARD_BEVORZUGTE_GERICHTE))
+
+
+# Süße Hauptgerichte, die die Kinder immer nehmen würden, wenn sie angeboten
+# werden. Abgeleitet aus den manuellen Korrekturen der automatischen
+# Bestellung im Oktober 2026 (Hefeklöße, Quarkkeulchen, Grießbrei wurden
+# jeweils statt der DGE-/Classic-Wahl genommen) plus den übrigen süßen
+# Gerichten, die im Speiseplan Sept.-Nov. 2026 vorkamen. Bewusst nur
+# Gerichtnamen, keine Zutaten wie "Vanille"/"Quark": jeder Tag hat einen
+# Nachtisch (z. B. "Vanillequarkspeise", "Erdbeerquark"), der sonst bei
+# herzhaften Gerichten mit anschlagen würde.
+STANDARD_BEVORZUGTE_GERICHTE = [
+    "Milchreis",
+    "Grießbrei",
+    "Quarkkeulchen",
+    "Hefeklöße",
+    "Dampfnudel",
+    "Germknödel",
+    "Eierkuchen",
+    "Pfannkuchen",
+    "Kaiserschmarrn",
+    "Arme Ritter",
+    "Buchteln",
+    "Apfelstrudel",
+]
 
 
 def lade_kinder(config_pfad: str) -> list[Kind]:
@@ -246,6 +277,7 @@ def lade_kinder(config_pfad: str) -> list[Kind]:
             ausschluesse=eintrag.get("ausschluesse", []),
             bevorzugte_kategorien=eintrag.get("bevorzugte_kategorien", []),
             vorlieben=eintrag.get("vorlieben", ""),
+            bevorzugte_gerichte=eintrag.get("bevorzugte_gerichte", list(STANDARD_BEVORZUGTE_GERICHTE)),
         )
         for eintrag in rohdaten
     ]
@@ -568,20 +600,44 @@ def lese_menueplan(page: Page, schulferien: Optional[list[tuple[date, date]]] = 
 
 # Kost-Kennzeichen, das die Seite jedem Gericht mitgibt (letzte Klammer der
 # Beschreibung, z. B. "... (F, Ia, IV, VII)"): K = vegetarisch, F = Fisch,
-# G = Fleisch. Per Live-Inspektion bestätigt (u. a. sichtbar als Blatt-/
-# Fisch-Icon neben dem Gericht). Zuverlässiger als Textsuche, da Gerichtnamen
-# das Wort "Fisch"/"Fleisch" oft gar nicht enthalten (z. B. "Lachswürfel",
-# "Hähnchenragout").
-KOST_KENNZEICHEN_FUER_AUSSCHLUSS = {
-    "fisch": "F",
-    "fleisch": "G",
-}
+# G = Geflügel/Fleisch, R = Rind. Per Live-Inspektion bestätigt (u. a.
+# sichtbar als Blatt-/Fisch-Icon neben dem Gericht). Zuverlässiger als
+# Textsuche, da Gerichtnamen das Wort "Fisch"/"Fleisch" oft gar nicht
+# enthalten (z. B. "Lachswürfel", "Hähnchenragout").
+#
+# "Fleisch" ist bewusst als "alles außer K und F" definiert statt als feste
+# Liste: R tauchte erst im Oktober 2026 auf ("Rindergulasch", 22.10.) und
+# rutschte bei einer reinen G-Liste als vegetarisch durch. Ein künftiges
+# unbekanntes Kennzeichen (z. B. für Schwein) schließt damit lieber ein
+# Gericht zu viel aus als ein Fleischgericht durchzulassen.
+KOST_KENNZEICHEN_VEGETARISCH = "K"
+KOST_KENNZEICHEN_FISCH = "F"
+KOST_KENNZEICHEN_AUSSCHLUESSE = {"fisch", "fleisch"}
 
 
 def _kost_kennzeichen(beschreibung: str) -> Optional[str]:
-    """Extrahiert K/F/G aus der letzten Klammer der Gerichtbeschreibung."""
-    treffer = re.findall(r"\(([A-Z])[,)]", beschreibung)
-    return treffer[-1] if treffer else None
+    """Extrahiert das Kost-Kennzeichen (K/F/G/R/…) aus der Gerichtbeschreibung.
+
+    Es steht vor der Liste der Allergen-Codes (römische Ziffern), meist in
+    Klammern ("(K, Ia, VII)"), live aber auch ohne ("… Wurstgulasch (1,3,5),
+    Tomaten-Gurken-Salat G, Ia, IX") oder mit nachgestelltem Code
+    ("(G, Ia, X), IX"). Gesucht wird daher ein einzelner Großbuchstabe,
+    direkt gefolgt von einem Allergen-Code; bei mehreren Treffern zählt der
+    letzte.
+    """
+    treffer = re.findall(
+        r"(?<![A-Za-zÄÖÜäöüß])([A-Z])(?=\s*,\s*[IVX]+[a-z]?\b)|\(([A-Z])\)", beschreibung
+    )
+    return "".join(treffer[-1]) if treffer else None
+
+
+def _per_kennzeichen_ausgeschlossen(kennzeichen: Optional[str], ausschluss: str) -> bool:
+    """Prüft einen "Fisch"/"Fleisch"-Ausschluss anhand des Kost-Kennzeichens."""
+    if kennzeichen is None:
+        return False
+    if ausschluss == "fisch":
+        return kennzeichen == KOST_KENNZEICHEN_FISCH
+    return kennzeichen not in (KOST_KENNZEICHEN_VEGETARISCH, KOST_KENNZEICHEN_FISCH)
 
 
 def waehle_gericht_regelbasiert(gerichte: list[str], kind: Kind) -> list[str]:
@@ -591,16 +647,12 @@ def waehle_gericht_regelbasiert(gerichte: list[str], kind: Kind) -> list[str]:
     Kennzeichen der Seite erkannt (siehe _kost_kennzeichen()), alle anderen
     Ausschlüsse per Textsuche in der Beschreibung.
     """
-    kennzeichen_ausschluesse = {
-        KOST_KENNZEICHEN_FUER_AUSSCHLUSS[a.lower()]
-        for a in kind.ausschluesse
-        if a.lower() in KOST_KENNZEICHEN_FUER_AUSSCHLUSS
-    }
-    text_ausschluesse = [a for a in kind.ausschluesse if a.lower() not in KOST_KENNZEICHEN_FUER_AUSSCHLUSS]
+    kennzeichen_ausschluesse = [a.lower() for a in kind.ausschluesse if a.lower() in KOST_KENNZEICHEN_AUSSCHLUESSE]
+    text_ausschluesse = [a for a in kind.ausschluesse if a.lower() not in KOST_KENNZEICHEN_AUSSCHLUESSE]
 
     gefiltert = [
         g for g in gerichte
-        if _kost_kennzeichen(g) not in kennzeichen_ausschluesse
+        if not any(_per_kennzeichen_ausgeschlossen(_kost_kennzeichen(g), a) for a in kennzeichen_ausschluesse)
         and not any(ausschluss.lower() in g.lower() for ausschluss in text_ausschluesse)
     ]
     return gefiltert or gerichte  # Fallback: falls alles ausgeschlossen ist, alle anzeigen
@@ -618,6 +670,28 @@ def waehle_gericht_nach_kategorie(optionen: list[str], bevorzugte_kategorien: li
         if kategorie in kategorie_zu_gericht:
             return kategorie_zu_gericht[kategorie]
     return None
+
+
+def _normalisiere(text: str) -> str:
+    """Kleinschreibung und ß→ss, damit "Hefeklöße" auch "Hefeklösse" findet."""
+    return text.lower().replace("ß", "ss")
+
+
+def waehle_bevorzugtes_gericht(
+    optionen: list[str], bevorzugte_gerichte: list[str], bevorzugte_kategorien: list[str]
+) -> Optional[str]:
+    """Wählt ein Gericht, dessen Beschreibung eines der Stichworte aus
+    bevorzugte_gerichte enthält (z. B. "Milchreis").
+
+    Bieten mehrere Kategorien so ein Gericht an, entscheidet wie gewohnt die
+    Reihenfolge in bevorzugte_kategorien, sonst die Reihenfolge der Seite.
+    Gibt None zurück, wenn keines angeboten wird.
+    """
+    stichworte = [_normalisiere(s) for s in bevorzugte_gerichte]
+    treffer = [g for g in optionen if any(s in _normalisiere(g) for s in stichworte)]
+    if not treffer:
+        return None
+    return waehle_gericht_nach_kategorie(treffer, bevorzugte_kategorien) or treffer[0]
 
 
 def waehle_gericht_per_ki(tag: str, optionen: list[str], kind: Kind, api_key: Optional[str]) -> str:
@@ -666,10 +740,17 @@ Antworte NUR mit dem exakten Gerichtnamen aus der Liste, ohne weitere Erklärung
 def waehle_gericht(tag: str, optionen: list[str], kind: Kind, api_key: Optional[str]) -> str:
     """Wählt aus den (bereits ausschlussgefilterten) Optionen ein Gericht.
 
-    Ist kind.bevorzugte_kategorien gesetzt, entscheidet das rein regelbasiert
-    (keine KI nötig). Nur wenn keine der bevorzugten Kategorien verfügbar ist
-    – oder gar keine gesetzt sind –, wird auf die Claude-API zurückgegriffen.
+    Wird eines der kind.bevorzugte_gerichte angeboten (z. B. Milchreis),
+    gewinnt das immer. Sonst entscheidet kind.bevorzugte_kategorien rein
+    regelbasiert (keine KI nötig). Nur wenn keine der bevorzugten Kategorien
+    verfügbar ist – oder gar keine gesetzt sind –, wird auf die Claude-API
+    zurückgegriffen.
     """
+    gericht = waehle_bevorzugtes_gericht(optionen, kind.bevorzugte_gerichte, kind.bevorzugte_kategorien)
+    if gericht is not None:
+        log.info("Bevorzugtes Gericht für %s am %s angeboten: %s", kind.name, tag, gericht)
+        return gericht
+
     if kind.bevorzugte_kategorien:
         gericht = waehle_gericht_nach_kategorie(optionen, kind.bevorzugte_kategorien)
         if gericht is not None:

@@ -227,6 +227,7 @@ Jedes Kind hat einen eigenen GFB-Catering-Account:
     "passwort": "passwort-kind-1",
     "ausschluesse": ["Fisch", "Fleisch"],
     "bevorzugte_kategorien": ["DGE", "Classic", "BIO-Veggie"],
+    "bevorzugte_gerichte": ["Milchreis", "Grießbrei", "Quarkkeulchen", "Hefeklöße", "Eierkuchen", "Kaiserschmarrn"],
     "vorlieben": ""
   },
   {
@@ -243,7 +244,11 @@ Jedes Kind hat einen eigenen GFB-Catering-Account:
 - **`ausschluesse`**: "Fisch" und "Fleisch" werden über das Kost-Kennzeichen
   erkannt, das die Seite jedem Gericht als ersten Buchstaben in der letzten
   Klammer der Beschreibung mitgibt (`K` = vegetarisch, `F` = Fisch,
-  `G` = Fleisch – z. B. sichtbar am Blatt-/Fisch-Icon neben dem Gericht).
+  `G` = Geflügel/Fleisch, `R` = Rind – z. B. sichtbar am Blatt-/Fisch-Icon
+  neben dem Gericht; die Klammer fehlt auf der Seite manchmal, das
+  Kennzeichen wird trotzdem erkannt). "Fleisch" schließt alles aus, was
+  weder `K` noch `F` ist, damit auch neu auftauchende Kennzeichen (wie `R`
+  im Oktober 2026) nicht als vegetarisch durchrutschen.
   Das ist zuverlässiger als eine Textsuche, da Gerichtnamen wie
   "Lachswürfel" oder "Hähnchenragout" die Wörter "Fisch"/"Fleisch" gar
   nicht enthalten. Alle anderen Einträge (z. B. `"Nüsse"`) werden weiterhin
@@ -255,6 +260,22 @@ Jedes Kind hat einen eigenen GFB-Catering-Account:
   regelbasiert, keine KI/API-Key nötig**. Leer lassen (`[]`), um
   stattdessen die Claude-API anhand von `vorlieben` entscheiden zu lassen
   (siehe Kind 2 im Beispiel oben).
+- **`bevorzugte_gerichte`**: Stichworte für Lieblingsgerichte (Textsuche in
+  der Beschreibung, Groß-/Kleinschreibung und ß/ss egal). Wird eines davon
+  angeboten – nach den Ausschlüssen –, gewinnt es **immer**, noch vor
+  `bevorzugte_kategorien`; bieten mehrere Kategorien eins an, entscheidet
+  wieder die Kategorie-Reihenfolge. Fehlt das Feld, gilt eine eingebaute
+  Liste süßer Hauptgerichte (`STANDARD_BEVORZUGTE_GERICHTE` in
+  `order_lunch.py`: Milchreis, Grießbrei, Quarkkeulchen, Hefeklöße,
+  Dampfnudeln, Germknödel, Eierkuchen, Pfannkuchen, Kaiserschmarrn, …) –
+  abgeleitet aus manuellen Korrekturen der automatischen Bestellung, bei
+  denen genau diese Gerichte statt der DGE-/Classic-Wahl genommen wurden.
+  `[]` schaltet die Bevorzugung ab. Bewusst nur Gerichtnamen statt Zutaten
+  wie "Vanille" oder "Quark", da fast jeder Tag einen Nachtisch wie
+  "Erdbeerquark" hat, der sonst auch bei herzhaften Gerichten anschlagen
+  würde. Wie alle Regeln wirkt das nur auf noch nicht bestellte Tage –
+  bestehende Bestellungen werden nie geändert (siehe "Cron-Zeitpunkt
+  ändern").
 
 Der Pfad zur Config-Datei kann über die Umgebungsvariable `KINDER_CONFIG`
 gesetzt werden (Default: `config.json`). `config.json` liegt in `.gitignore`
